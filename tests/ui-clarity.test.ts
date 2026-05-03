@@ -405,17 +405,17 @@ describe("leaderboard: provisional warning, BEST suppressed on tiny N", () => {
     assert.doesNotMatch(html, /PROVISIONAL/);
   });
 
-  it("an empty lane leaderboard renders a lane-aware 'no evaluable runs' copy", () => {
+  it("an empty lane leaderboard renders a lane-aware no-runs message without quarantine copy", () => {
     const ui = loadUi();
     ui.state.tabData.memory = { runs: [], leaderboard: [], leaderboardMeta: { ranking_mode: "public_verified", eligible_count: 0, quarantined_count: 2 } };
     const html = ui.renderComparisonBars("memory", "Memory Leaderboard", [], "avgOverall");
     assert.match(html, /SCOPE · LANE · MEMORY/i);
-    assert.match(html, /No verified eligible memory runs are available/i);
-    assert.match(html, /2 runs are quarantined/i);
+    assert.match(html, /No memory runs are available for ranking yet/i);
+    assert.doesNotMatch(html, /quarantined/i);
     assert.doesNotMatch(html, /class="tag teal">BEST/);
   });
 
-  it("leaderboard quarantine panel shows reason buckets without ranking badges", () => {
+  it("leaderboard graph omits quarantine panels from the product UI", () => {
     const ui = loadUi();
     ui.state.tabData.safety = {
       runs: [],
@@ -429,11 +429,42 @@ describe("leaderboard: provisional warning, BEST suppressed on tiny N", () => {
       },
     };
     const html = ui.renderComparisonBars("safety", "Safety Leaderboard", [{ model: "verified", runs: 3, avgOverall: 88, passRate: 100 }], "avgOverall");
-    assert.match(html, /NOT RANKED/);
-    assert.match(html, /LEGACY UNVERIFIED 1/);
-    assert.match(html, /MOCK OR DEMO 1/);
-    assert.match(html, /MALFORMED 1/);
-    assert.doesNotMatch(html, /MOCK\/DEMO[^<]*BEST/);
+    assert.doesNotMatch(html, /NOT RANKED/);
+    assert.doesNotMatch(html, /LEGACY UNVERIFIED/);
+    assert.doesNotMatch(html, /MOCK OR DEMO/);
+    assert.doesNotMatch(html, /MALFORMED/);
+  });
+
+  it("lane leaderboard falls back to observed local run history when public rows are empty", () => {
+    const ui = loadUi();
+    ui.state.tabData.safety = {
+      runs: [
+        { bundle_id: "r1", model: "model-a", score: 91, pass: true },
+        { bundle_id: "r2", model: "model-a", score: 81, pass: true },
+        { bundle_id: "r3", model: "model-b", score: 52, pass: false },
+      ],
+      leaderboard: [],
+      leaderboardMeta: { ranking_mode: "public_verified", eligible_count: 0, quarantined_count: 3 },
+    };
+    const html = ui.renderLane("safety");
+    assert.match(html, /model-a/);
+    assert.match(html, /86%/);
+    assert.doesNotMatch(html, /quarantined/i);
+  });
+
+  it("category matrix is hidden when no real category dimensions exist", () => {
+    const ui = loadUi();
+    ui.state.tabData.safety = {
+      runs: [{ bundle_id: "r1", model: "model-a", score: 91, pass: true }],
+      leaderboard: [],
+      selectedTasks: [],
+      selectedModels: [],
+      stats: { total_runs: 1, pass_rate: 100, avg_score: 91 },
+      leaderboardMeta: { ranking_mode: "public_verified", eligible_count: 0, quarantined_count: 1 },
+    };
+    const html = ui.renderLane("safety");
+    assert.doesNotMatch(html, /Category Matrix/);
+    assert.doesNotMatch(html, /NO CATEGORY SIGNAL YET/);
   });
 
   it("legacy compact leaderboard does not crown BEST for ineligible or undersampled rows", () => {

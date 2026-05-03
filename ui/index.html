@@ -802,7 +802,7 @@ async function loadBootData(){
 async function refreshTabData(tabKey){
   const config=TAB_CONFIG[tabKey];
   const scope=config.taskFamilies&&config.taskFamilies.length?{taskFamilies:config.taskFamilies}:null;
-  const leaderboardScope=scope?{...scope,includeQuarantined:true}:{includeQuarantined:true};
+  const leaderboardScope=scope?{...scope}:null;
   const expectedScopeKey=laneScopeKey(tabKey);
   let stats,leaderboard,runs;
   try{
@@ -831,7 +831,7 @@ async function refreshTabData(tabKey){
     }
   }
   const next=reconcileTabSelection(tabKey,state.tabData[tabKey]||defaultTabState());
-  state.tabData[tabKey]={...next,stats,leaderboard:leaderboard.leaderboard||[],leaderboardMeta:{ranking_mode:leaderboard.ranking_mode||'public_verified',eligible_count:Number(leaderboard.eligible_count||0),quarantined_count:Number(leaderboard.quarantined_count||leaderboard.ineligible_count||0),malformed_count:Number(leaderboard.malformed_count||leaderboard.malformed_count_in_scope||0),malformed_count_total:Number(leaderboard.malformed_count_total||0),malformed_count_unknown_scope:Number(leaderboard.malformed_count_unknown_scope||0),filters_applied:leaderboard.filters_applied||{},reason_buckets:leaderboard.quarantine_reason_buckets||{},quarantine_examples:leaderboard.quarantine_examples||[],excluded_mock_demo:leaderboard.excluded_mock_demo===true,excluded_unverified_or_tampered:leaderboard.excluded_unverified_or_tampered===true},runs:runs.runs||[],scopeKey:expectedScopeKey,dataError:null};
+  state.tabData[tabKey]={...next,stats,leaderboard:leaderboard.leaderboard||[],leaderboardMeta:{ranking_mode:leaderboard.ranking_mode||'public_verified',eligible_count:Number(leaderboard.eligible_count||0),quarantined_count:Number(leaderboard.quarantined_count||leaderboard.ineligible_count||0),malformed_count:Number(leaderboard.malformed_count||leaderboard.malformed_count_in_scope||0),malformed_count_total:Number(leaderboard.malformed_count_total||0),malformed_count_unknown_scope:Number(leaderboard.malformed_count_unknown_scope||0),filters_applied:leaderboard.filters_applied||{},reason_buckets:leaderboard.quarantine_reason_buckets||{},quarantine_examples:[],excluded_mock_demo:leaderboard.excluded_mock_demo===true,excluded_unverified_or_tampered:leaderboard.excluded_unverified_or_tampered===true},runs:runs.runs||[],scopeKey:expectedScopeKey,dataError:null};
   if(!state.focusedResult[tabKey]&&state.tabData[tabKey].runs[0])state.focusedResult[tabKey]=normalizeRunForDisplay(state.tabData[tabKey].runs[0]);
 }
 
@@ -1502,7 +1502,8 @@ function normalizeRunForDisplay(run){
       timeMs:Number(pick(run,'duration_ms','elapsed_ms')||0),
       status:statusWord(overall,pick(run,'pass')===false?'fail':'pass'),
       statusClass:outcomeClass(overall,pick(run,'pass')===false?'fail':'pass'),
-      outcome:buildFailureText(run,overall,pick(run,'summary','message')||description)
+      outcome:buildFailureText(run,overall,pick(run,'summary','message')||description),
+      synthetic:true
     }]),
     operationalRows:[{
       model,
@@ -2303,7 +2304,6 @@ function aggregateModelInsights(tabKey){
       };
     }).sort((a,b)=>b.avgOverall-a.avgOverall||b.passRate-a.passRate||b.runs-a.runs);
   }
-  if(state.tabData?.[tabKey]?.leaderboardMeta?.ranking_mode==='public_verified')return[];
   const grouped=new Map();
   for(const run of scopeNormalizedRuns(tabKey)){
     const key=normalizeId(run.model);
@@ -2328,6 +2328,7 @@ function aggregateModelInsights(tabKey){
     existing.duration+=Number(run.categories?.[0]?.timeMs||0);
     existing.cost+=Number(op.cost||0);
     for(const category of run.categories||[]){
+      if(category.synthetic===true)continue;
       const ckey=normalizeKey(category.rawName||category.key||category.name);
       const bucket=existing.categories[ckey]||{total:0,count:0,label:category.name};
       bucket.total+=Number(category.score||0);
@@ -2420,19 +2421,17 @@ function renderOverviewCards(tabKey){
 }
 function renderComparisonBars(tabKey,title,entries,metricKey='avgOverall'){
   const scope=laneScopeDescriptor(tabKey);
-  const meta=state.tabData?.[tabKey]?.leaderboardMeta||{};
   const dataError=state.tabData?.[tabKey]?.dataError||null;
   const errorBanner=dataError?renderDataErrorState(tabKey,dataError):'';
   if(!entries.length){
-    const q=Number(meta.quarantined_count||0);
     const emptyMsg=dataError
       ? errorGuidance(dataError)
       : scope.kind==='lane'
-      ? `No verified eligible ${scope.tabLabel.toLowerCase()} runs are available for public ranking.${q?` ${q} run${q===1?' is':'s are'} quarantined as unverified, tampered, legacy, mock, or demo evidence.`:''}`
+      ? `No ${scope.tabLabel.toLowerCase()} runs are available for ranking yet. Run this lane or import run history to populate the leaderboard.`
       : scope.kind==='global'
-        ? `No verified eligible runs are available for public ranking across any lane.${q?` ${q} run${q===1?' is':'s are'} quarantined as unverified, tampered, legacy, mock, or demo evidence.`:''}`
+        ? 'No runs are available for ranking across any lane yet. Run a lane or import run history to populate the leaderboard.'
         : 'No comparable data in this view.';
-    const emptyTitle=dataError?`${failureReasonLabel(dataError.kind).toUpperCase()} · RANKINGS INCOMPLETE`:`NO VERIFIED RUNS · SCOPE · ${scope.scopeLabel}`;
+    const emptyTitle=dataError?`${failureReasonLabel(dataError.kind).toUpperCase()} · RANKINGS INCOMPLETE`:`NO RANKABLE RUNS · SCOPE · ${scope.scopeLabel}`;
     return`<section class="panel" style="padding:14px"><div class="section-head"><div><div class="mini-label">GRAPH FIRST</div><h3>${esc(title)}</h3></div><span class="chip dim scope-chip" data-scope-kind="${scope.kind}" title="${esc(scope.familiesLabel)}">SCOPE · ${esc(scope.scopeLabel)}</span></div>${errorBanner}<div class="empty empty-lane"><div class="empty-title">${esc(emptyTitle)}</div><div class="empty-body">${esc(emptyMsg)}</div></div></section>`;
   }
   const top=Math.max(...entries.map((entry)=>Number(entry[metricKey]||0)),1);
@@ -2445,30 +2444,18 @@ function renderComparisonBars(tabKey,title,entries,metricKey='avgOverall'){
   const provisionalBanner=scope.kind==='lane'&&scope.provisional
     ? `<div class="inline-warn" style="color:var(--amber,#d97706);border-color:rgba(217,119,6,.32);background:rgba(217,119,6,.06)">PROVISIONAL · ${scope.sampleSize} run${scope.sampleSize===1?'':'s'} in scope · fewer than ${LEADERBOARD_MIN_N_UI} meet the sample threshold — treat rankings as indicative, not authoritative.</div>`
     : '';
-  const quarantineBanner=Number(meta.quarantined_count||0)>0
-    ? `<div class="inline-warn" style="color:var(--orange);border-color:rgba(251,146,60,.32);background:rgba(251,146,60,.06)">PUBLIC RANKING · ${Number(meta.eligible_count||entries.length)} verified eligible run${Number(meta.eligible_count||entries.length)===1?'':'s'} ranked · ${Number(meta.quarantined_count||0)} quarantined as unverified, tampered, legacy, mock, or demo.</div>`
-    : '';
-  const buckets=meta.reason_buckets||{};
-  const bucketText=Object.entries(buckets).filter(([,v])=>Number(v)>0).map(([k,v])=>`${String(k).replace(/_/g,' ').toUpperCase()} ${Number(v)}`).join(' · ');
-  const quarantinePanel=Number(meta.quarantined_count||0)>0
-    ? `<div class="inline-warn" style="color:var(--muted);border-color:var(--border);background:rgba(255,255,255,.03)">NOT RANKED · ${bucketText||'unverified evidence quarantined'}${Number(meta.malformed_count_unknown_scope||0)>0?` · ${Number(meta.malformed_count_unknown_scope)} malformed file${Number(meta.malformed_count_unknown_scope)===1?'':'s'} have unknown scope`:''}</div>`
-    : '';
   return`<section class="panel" style="padding:14px">
     <div class="section-head"><div><div class="mini-label">GRAPH FIRST</div><h3>${esc(title)}</h3></div><span class="chip ${scope.kind==='lane'?'teal':'dim'} scope-chip" data-scope-kind="${scope.kind}" title="${esc(scope.familiesLabel)}">SCOPE · ${esc(scope.scopeLabel)}</span></div>
     ${errorBanner}
     ${provisionalBanner}
-    ${quarantineBanner}
-    ${quarantinePanel}
     <div class="comparison-chart">${entries.map((entry,index)=>{const score=Math.round(Number(entry[metricKey]||0));const width=Math.max(6,Math.round((score/top)*100));const cls=score>=80?'pass':score>=55?'warn':'fail';const tooFewRuns=Number(entry.runs||0)<LEADERBOARD_MIN_N_UI;const bestTag=index===0&&canCrownBest?'<span class="tag teal">BEST</span>':(index===0?'<span class="tag dim" title="Leading, but sample is under the provisional threshold">TOP · n='+Number(entry.runs||0)+'</span>':'');const nTag=tooFewRuns?'<span class="tag dim" title="Under '+LEADERBOARD_MIN_N_UI+' runs — provisional">n='+Number(entry.runs||0)+'</span>':'';return`<div class="comparison-row ${cls}"><div class="comparison-head"><div class="comparison-model">${esc(entry.model)}</div><div class="comparison-meta">${entry.runs||0}R · ${entry.passRate||0}% pass</div></div><div class="comparison-bar"><div class="comparison-fill" style="width:${width}%"></div></div><div class="comparison-score">${score}%</div><div class="comparison-tags">${bestTag}${nTag}${entry.costAvg>0?`<span class="tag dim">${esc(fmtMoney(entry.costAvg))}</span>`:''}${entry.durationAvg>0?`<span class="tag dim">${esc(fmtMs(entry.durationAvg))}</span>`:''}</div></div>`}).join('')}</div>
   </section>`;
 }
 
 function renderLeaderboardEmpty(tabKey){
-  const meta=state.tabData?.[tabKey]?.leaderboardMeta||{};
   const dataError=state.tabData?.[tabKey]?.dataError||null;
-  const q=Number(meta.quarantined_count||0);
   if(dataError)return`<div class="empty empty-lane"><div class="empty-title">${esc(failureReasonLabel(dataError.kind).toUpperCase())} · RANKINGS INCOMPLETE</div><div class="empty-body">${esc(errorGuidance(dataError))}</div></div>`;
-  return`<div class="empty empty-lane"><div class="empty-title">NO VERIFIED RUNS AVAILABLE</div><div class="empty-body">Default public rankings require verified eligible evidence.${q?` ${q} quarantined run${q===1?' is':'s are'} visible only as NOT RANKED metadata.`:' Run the smoke path for a local demo, or import verified evidence to rank models.'}</div></div>`;
+  return`<div class="empty empty-lane"><div class="empty-title">NO RANKABLE RUNS AVAILABLE</div><div class="empty-body">Run this lane or import run history to populate the leaderboard.</div></div>`;
 }
 
 function errorGuidance(err){
@@ -2491,8 +2478,13 @@ function renderCategoryReview(tabKey){
   // so the user sees every dimension at a glance instead of scrolling a
   // card-per-category list with stacked mini-bars.
   const summary=reviewSummary(tabKey);
-  if(!summary.rollups.length)return`<section class="panel" style="padding:14px"><div class="section-head"><div><div class="mini-label">LAYER B</div><h3>Category Matrix</h3></div></div><div class="empty">NO CATEGORY SIGNAL YET</div></section>`;
-  const dims=laneDimensionObjects(tabKey,summary.rollups).filter((d)=>d.key!=='speed');
+  if(!summary.rollups.length)return'';
+  const categoryKeys=new Set();
+  for(const rollup of summary.rollups){
+    for(const key of Object.keys(rollup.categories||{}))categoryKeys.add(key);
+  }
+  const dims=laneDimensionObjects(tabKey,summary.rollups).filter((d)=>d.key!=='overall'&&d.key!=='speed'&&categoryKeys.has(d.key));
+  if(!dims.length)return'';
   const models=summary.rollups.slice(0,8);
   const cellCls=(score)=>score>=80?'pass':score>=55?'warn':score>0?'fail':'none';
   const headerCells=dims.map((d)=>`<div class="mx-col-head" title="${esc(d.label)}">${esc(d.label.split(' ')[0])}</div>`).join('');
@@ -2508,7 +2500,7 @@ function renderCategoryReview(tabKey){
   }).join('');
   const laneLabel=TAB_CONFIG[tabKey]?.label||'Lane';
   return`<section class="panel" style="padding:14px">
-    <div class="section-head"><div><div class="mini-label">LAYER B · GRAPH</div><h3>${esc(laneLabel)} Category Matrix</h3></div><span class="chip dim">${models.length}×${dims.length}</span></div>
+    <div class="section-head"><div><div class="mini-label">CATEGORY GRAPH</div><h3>${esc(laneLabel)} Category Matrix</h3></div><span class="chip dim">${models.length}×${dims.length}</span></div>
     <div class="matrix-head" style="grid-template-columns:minmax(140px,1.4fr) minmax(0,3fr)">
       <div class="mx-corner">MODEL</div>
       <div class="mx-cells mx-col-heads" style="grid-template-columns:repeat(${dims.length},minmax(0,1fr))">${headerCells}</div>
@@ -2538,7 +2530,6 @@ function aggregateLeaderboard(tabKey='dashboard',limit=6){
       sampleAdequate:entry.sample_adequate===true&&entry.ranking_eligible!==false
     }));
   }
-  if(state.tabData?.[tabKey]?.leaderboardMeta?.ranking_mode==='public_verified')return[];
   const grouped=new Map();
   for(const run of scopeRuns(tabKey)){
     const normalized=normalizeRunForDisplay(run);
@@ -2650,13 +2641,14 @@ function renderHero(){
   const stats=statsForTab(state.activeTab);
   const best=aggregateLeaderboard(state.activeTab,1)[0];
   const meta=state.tabData?.[state.activeTab]?.leaderboardMeta||{};
+  const hasRanking=!!best;
   const hasPublicRanking=Number(meta.eligible_count||0)>0&&!!best;
-  const score=hasPublicRanking?Math.round(best.score||stats.avgScore||0):'—';
+  const score=hasRanking?Math.round(best.score||stats.avgScore||0):'—';
   const passRate=Math.round(stats.passRate||0);
   const totalRuns=stats.totalRuns||0;
   const statusCls=status==='complete'?'teal':status==='error'?'red':status==='idle'?'dim':'orange';
-  const topModel=hasPublicRanking?best.model:'NO VERIFIED RANK';
-  const topScore=hasPublicRanking?best.score:null;
+  const topModel=hasRanking?best.model:'NO RANK YET';
+  const topScore=hasRanking?best.score:null;
   const scope=laneScopeDescriptor(state.activeTab);
   const activeLaneLabel=scope.tabLabel;
   // Scope chip: explicit, authoritative answer to "what am I looking at?".
@@ -2674,10 +2666,10 @@ function renderHero(){
     ? `<div class="chip amber hot" title="Fewer than ${LEADERBOARD_MIN_N_UI} runs meet the sample threshold in this lane — treat rankings as provisional.">PROVISIONAL · n=${scope.sampleSize}</div>`
     : '';
   const scoreWidth=typeof score==='number'?score:0;
-  const scoreLabel=hasPublicRanking?'PUBLIC SCORE':'PUBLIC SCORE';
-  const topChip=hasPublicRanking
+  const scoreLabel=hasPublicRanking?'PUBLIC SCORE':'OBSERVED SCORE';
+  const topChip=hasRanking
     ? `<div class="chip orange">TOP ${esc(String(topModel).slice(0,16).toUpperCase())}${topScore!=null?' · '+topScore+'%':''}</div>`
-    : `<div class="chip orange" title="Default public ranking excludes unverified, tampered, legacy, mock, and demo bundles.">NO VERIFIED RANK</div>`;
+    : `<div class="chip orange">NO RANK YET</div>`;
   return`<section class="abyss-banner"><div class="ab-squid" aria-hidden="true"><img src="squidley.png" alt=""><div class="ab-squid-halo"></div></div><div class="ab-callsign"><div class="ab-mark">CRCB · ${esc(activeLaneLabel.toUpperCase())}</div><div class="ab-title">CRUCIBLE</div><div class="ab-sub">BIOLUMINESCENT EVALUATION LATTICE</div><div class="ab-score-inline"><div class="ab-score-row"><span class="ab-score-label">${scoreLabel}</span><span class="ab-score-inline-num">${score}</span><span class="ab-score-runs">${totalRuns} RUN${totalRuns===1?'':'S'} INDEXED</span></div><div class="ab-score-bar"><div class="ab-score-fill" style="width:${scoreWidth}%"></div></div></div><div class="view-toggle"><button class="${state.viewMode==='simple'?'active':''}" onclick="setViewMode('simple')">SIMPLE</button><button class="${state.viewMode==='expert'?'active':''}" onclick="setViewMode('expert')">EXPERT</button></div></div><div class="ab-telemetry">${scopeChip}${provisionalChip}<div class="chip ${statusCls} hot">● ${esc(status.toUpperCase())}</div><div class="chip teal">PASS ${passRate}%</div>${topChip}<div class="chip dim">RUNS ${totalRuns}</div></div></section>`;
 }
 function evidenceValue(label,value){
