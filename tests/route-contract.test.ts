@@ -33,7 +33,7 @@ process.env["CRUCIBULUM_ALLOW_LOCAL"] = "true";
 process.env["CRUCIBLE_HMAC_KEY"] = "route-contract-test-hmac-key";
 
 const { createApp } = await import("../server/app.js");
-const { __resetRateLimiterForTests } = await import("../server/rate-limit.js");
+const { __resetRateLimiterForTests, RATE_RUN } = await import("../server/rate-limit.js");
 const { storeBundle, buildBundle } = await import("../core/bundle.js");
 const registry = await import("../core/provider-registry.js");
 
@@ -807,6 +807,27 @@ describe("route: GET /api/scores/leaderboard", () => {
 // ── rate limiter (HTTP level) ───────────────────────────────────────────────
 
 describe("rate limiter at HTTP level", () => {
+  it("allows a normal 14-task benchmark batch without local POST throttling", async () => {
+    __resetRateLimiterForTests();
+    const rlServer = createApp({ rateLimit: true });
+    await new Promise<void>((r) => rlServer.listen(0, "127.0.0.1", () => r()));
+    const addr = rlServer.address() as AddressInfo;
+    const rlBase = `http://127.0.0.1:${addr.port}`;
+    try {
+      const statuses: number[] = [];
+      for (let i = 0; i < 14; i++) {
+        const r = await fetch(`${rlBase}/api/run`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+        });
+        statuses.push(r.status);
+        await r.body?.cancel();
+      }
+      assert.ok(!statuses.includes(429), "14-task benchmark starts must not be locally rate-limited");
+    } finally {
+      await new Promise<void>((r) => rlServer.close(() => r()));
+    }
+  });
+
   it("returns 429 with Retry-After when the POST bucket is exhausted", async () => {
     // Stand up a second server with rate limiting on, so we don't clobber the
     // main test server's allowance.
@@ -816,9 +837,11 @@ describe("rate limiter at HTTP level", () => {
     const addr = rlServer.address() as AddressInfo;
     const rlBase = `http://127.0.0.1:${addr.port}`;
     try {
-      // RATE_RUN limit is 10/min. Fire 12 and check that at least one is 429.
+      // Exhaust the configured run-start bucket and check that at least one
+      // request is rejected. The exact limit is intentionally much higher than
+      // one normal benchmark batch.
       const results: number[] = [];
-      for (let i = 0; i < 12; i++) {
+      for (let i = 0; i < RATE_RUN.limit + 2; i++) {
         const r = await fetch(`${rlBase}/api/run`, {
           method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
         });

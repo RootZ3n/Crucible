@@ -3182,18 +3182,38 @@ async function registryAddProvider(presetId){
   const label=prompt(`Label for ${preset.label}:`,preset.label);
   if(label===null)return;
   let apiKey=null;
+  let apiKeyEnv=preset.envKey;
   if(preset.envKey){
-    const useEnv=confirm(`Use ${preset.envKey} from the environment?\n\nOK = read from env var (most secure)\nCancel = paste a key inline`);
-    if(!useEnv){
-      const entered=prompt(`Paste API key for ${preset.label} (masked in storage, never returned by GET):`);
-      if(entered===null)return;
-      apiKey=entered;
-    }
+    const entered=prompt(`Paste API key for ${preset.label}.\n\nLeave blank to use ${preset.envKey} from the server environment.`);
+    if(entered===null)return;
+    apiKey=entered.trim()||null;
+    apiKeyEnv=apiKey?null:preset.envKey;
   }
   try{
-    await fetchJSON('/api/registry/providers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({presetId,label,apiKey,apiKeyEnv:apiKey?null:preset.envKey})});
+    await fetchJSON('/api/registry/providers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({presetId,label,apiKey,apiKeyEnv})});
     await loadRegistry();render();
   }catch(err){alert(`Could not add provider: ${err.message||err}`)}
+}
+async function registrySetProviderKey(providerId){
+  const provider=(state.registry.providers||[]).find(p=>p.id===providerId);
+  if(!provider)return;
+  const entered=prompt(`Paste API key for ${provider.label}.\n\nIt will be stored inline and masked in the UI.`);
+  if(entered===null)return;
+  const apiKey=entered.trim();
+  if(!apiKey){alert('No key entered.');return}
+  try{
+    await fetchJSON(`/api/registry/providers/${encodeURIComponent(providerId)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({apiKey,apiKeyEnv:null})});
+    await loadRegistry();render();
+  }catch(err){alert(`Could not save key: ${err.message||err}`)}
+}
+async function registryUseProviderEnv(providerId){
+  const provider=(state.registry.providers||[]).find(p=>p.id===providerId);
+  const preset=(state.registry.presets||[]).find(p=>p.id===provider?.presetId);
+  if(!provider||!preset?.envKey)return;
+  try{
+    await fetchJSON(`/api/registry/providers/${encodeURIComponent(providerId)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({apiKey:null,apiKeyEnv:preset.envKey})});
+    await loadRegistry();render();
+  }catch(err){alert(`Could not switch to env key: ${err.message||err}`)}
 }
 async function registryRemoveProvider(providerId){
   if(!confirm('Remove this provider? Its registered models will also be removed. Existing bundle history remains intact.'))return;
@@ -3293,6 +3313,10 @@ function renderProviderCard(provider){
   const tested=provider.lastTestedAt?`${provider.lastTestedOk?'OK':'FAIL'} · ${new Date(provider.lastTestedAt).toLocaleTimeString()}${provider.lastTestedReason?' · '+provider.lastTestedReason:''}${structuredTested}`:'not tested';
   const testCls=provider.lastTestedOk===true?'ok':provider.lastTestedOk===false?'fail':'unknown';
   const keyStatus=provider.apiKeyInline?`inline ${provider.apiKeyInline}`:(provider.apiKeyEnv?`env ${provider.apiKeyEnv} ${provider.apiKeyEnvSet?'✓':'✗'}`:'none');
+  const keyCls=provider.apiKeyInline||provider.apiKeyEnvSet?'ok':'fail';
+  const keyAction=preset?.envKey?`
+      <button class="button tiny ${keyCls==='fail'?'':'ghost'}" onclick="registrySetProviderKey('${esc(provider.id)}')">${provider.apiKeyInline?'REPLACE KEY':'SET KEY'}</button>
+      <button class="button tiny ghost" onclick="registryUseProviderEnv('${esc(provider.id)}')">USE ENV</button>`:'';
   const circuitChip=circuit.state==='closed'?'':`<span class="chip ${circuit.state==='open'?'red':'orange'} hot">${esc(circuit.state.toUpperCase())} · ${circuit.failures}F</span>`;
   const totalSpend=registryProviderCostTotal(provider.id);
   const spendCell=totalSpend!=null?`<div class="tel-cell"><div class="tel-k">LIFETIME</div><div class="tel-v">${fmtMoney(totalSpend)}</div></div>`:`<div class="tel-cell"><div class="tel-k">LIFETIME</div><div class="tel-v"><span class="dim">unknown</span></div></div>`;
@@ -3329,7 +3353,7 @@ google/gemini-2.5-pro"></textarea>
     </div>
     <div class="pc-row"><div class="pc-k">preset</div><div class="pc-v">${esc(provider.presetLabel||provider.presetId)} · ${esc(provider.adapter||'')}</div></div>
     <div class="pc-row"><div class="pc-k">base url</div><div class="pc-v">${esc(provider.baseUrl||'(adapter default)')}</div></div>
-    <div class="pc-row"><div class="pc-k">api key</div><div class="pc-v">${esc(keyStatus)}</div></div>
+    <div class="pc-row"><div class="pc-k">api key</div><div class="pc-v ${keyCls==='fail'?'fail':'ok'}">${esc(keyStatus)}</div></div>
     <div class="pc-row"><div class="pc-k">last test</div><div class="pc-v">${esc(tested)}</div></div>
     <div class="registry-spend">
       <div class="tel-cell"><div class="tel-k">MODELS</div><div class="tel-v">${models.length} (${models.filter(m=>m.enabled).length} ENABLED)</div></div>
@@ -3337,6 +3361,7 @@ google/gemini-2.5-pro"></textarea>
     </div>
     <div class="pc-actions">
       <button class="button tiny" onclick="registryTestProvider('${esc(provider.id)}')">TEST</button>
+      ${keyAction}
       <button class="button tiny ghost" onclick="registryToggleProvider('${esc(provider.id)}',${!provider.enabled})">${provider.enabled?'DISABLE':'ENABLE'}</button>
       <button class="button tiny ghost" onclick="registryAddModel('${esc(provider.id)}')">+ MODEL</button>
       <button class="button tiny ghost" onclick="registryOpenBulkFor('${esc(provider.id)}')">+ BULK</button>

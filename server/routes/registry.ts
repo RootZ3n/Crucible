@@ -138,7 +138,10 @@ export async function handleTestProvider(_req: IncomingMessage, res: ServerRespo
   // Decide what to probe. For presets that advertise listing, hit /models —
   // that doubles as an auth check. For providers that don't, just issue a
   // HEAD/GET on the base URL to prove network reachability.
-  const probePath = preset.supportsModelListing ? "/models" : "";
+  // OpenRouter's /models endpoint is public enough to return 200 without a
+  // usable key. Probe /key instead so "Test provider" proves the credential
+  // can authenticate actual metered requests.
+  const probePath = preset.id === "openrouter" ? "/key" : preset.supportsModelListing ? "/models" : "";
   const url = `${baseUrl.replace(/\/+$/, "")}${probePath}`;
 
   let outcome: { ok: boolean; reason: string; providerError: StructuredProviderError | null };

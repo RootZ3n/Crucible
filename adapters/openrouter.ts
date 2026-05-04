@@ -109,7 +109,8 @@ export class OpenRouterAdapter implements CrucibulumAdapter {
       return { ok: false, reason: providerErrorDetail(providerError), providerError };
     }
     try {
-      const res = await fetch(`${this.baseUrl}/models`, {
+      const healthPath = /openrouter\.ai/i.test(this.baseUrl) ? "/key" : "/models";
+      const res = await fetch(`${this.baseUrl}${healthPath}`, {
         headers: { "Authorization": `Bearer ${this.apiKey}` },
         signal: AbortSignal.timeout(10000),
       });

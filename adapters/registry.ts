@@ -1,5 +1,5 @@
 import type { AdapterConfig, CrucibulumAdapter } from "./base.js";
-import { listProviders, getPreset } from "../core/provider-registry.js";
+import { listProviders, getPreset, resolveByModelIdWithHint } from "../core/provider-registry.js";
 import { OllamaAdapter } from "./ollama.js";
 import { OpenRouterAdapter } from "./openrouter.js";
 import { OpenClawAdapter } from "./openclaw.js";
@@ -442,6 +442,7 @@ export async function getAdapterCatalog(): Promise<AdapterCatalogEntry[]> {
   const entries: AdapterCatalogEntry[] = [];
   for (const entry of REGISTRY) {
     try {
+      hydrateEnvFromRegistry(entry.id);
       const adapter = entry.create();
       const config = entry.makeConfig({ model: "", provider: entry.fixed_provider });
       await adapter.init(config);
@@ -521,6 +522,13 @@ export async function instantiateAdapterForRun(input: {
     model: input.model,
     provider: input.provider ?? registry.fixed_provider,
   });
+  const registryTarget = resolveByModelIdWithHint(input.model, input.provider);
+  if (registryTarget && registryTarget.adapter === registry.id) {
+    const keyedConfig = config as AdapterConfig & { api_key?: string; base_url?: string };
+    const apiKey = registryTarget.apiKey ?? (registryTarget.apiKeyEnv ? process.env[registryTarget.apiKeyEnv] ?? "" : "");
+    if (apiKey) keyedConfig.api_key = apiKey;
+    if (registryTarget.baseUrl) keyedConfig.base_url = registryTarget.baseUrl;
+  }
   if (typeof input.timeout_ms === "number" && input.timeout_ms > 0) config.timeout_ms = input.timeout_ms;
   if (typeof input.retries === "number" && input.retries >= 0) config.retries = input.retries;
   await adapter.init(config);

@@ -40,6 +40,9 @@ describe("adapter registry", () => {
       if (url.includes("/api/tags")) {
         return new Response(JSON.stringify({ models: [] }), { status: 200 });
       }
+      if (url.includes("openrouter.ai") && url.endsWith("/key")) {
+        return new Response("Unauthorized", { status: 401 });
+      }
       if (url.includes("/models")) {
         // OpenAI / OpenRouter without key — health check will fail before reaching here
         return new Response("Unauthorized", { status: 401 });
@@ -51,7 +54,7 @@ describe("adapter registry", () => {
     const openrouter = catalog.find((entry) => entry.id === "openrouter");
     assert.ok(openrouter);
     assert.equal(openrouter.available, false);
-    assert.match(openrouter.reason || "", /API_KEY/i);
+    assert.match(openrouter.reason || "", /API_KEY|Authentication/i);
   });
 
   it("flattens adapter-backed model availability from registry APIs", async () => {
@@ -62,6 +65,10 @@ describe("adapter registry", () => {
         return new Response(JSON.stringify({
           models: [{ name: "gemma4:26b", details: { family: "gemma4", parameter_size: "26b" } }],
         }), { status: 200 });
+      }
+      if (url.includes("openrouter.ai") && url.endsWith("/key")) {
+        assert.match(String((init && init.headers && (init.headers as Record<string, string>)["Authorization"]) || ""), /Bearer/);
+        return new Response(JSON.stringify({ data: { label: "test-key" } }), { status: 200 });
       }
       if (url.endsWith("/models")) {
         assert.match(String((init && init.headers && (init.headers as Record<string, string>)["Authorization"]) || ""), /Bearer/);

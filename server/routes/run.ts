@@ -542,6 +542,8 @@ export async function handleRunPost(req: IncomingMessage, res: ServerResponse): 
 }
 
 export async function handleRunLive(req: IncomingMessage, res: ServerResponse, path: string): Promise<void> {
+  // SSE stream — auth guard is in app.ts (top-level route handler enforces
+  // token or session before routing here). No additional check needed.
   const runId = path.replace("/api/run/", "").replace("/live", "");
   res.writeHead(200, {
     "Content-Type": "text/event-stream",

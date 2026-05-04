@@ -110,10 +110,10 @@ export function __resetRateLimiterForTests(): void {
 
 // ── Default rules ────────────────────────────────────────────────────────────
 //
-// Conservative defaults: cheap reads get a generous bucket, mutating/expensive
-// work (run, run-batch, run-suite, synthesis, ingest) gets a much tighter one.
-// Values chosen to be comfortable for a human operator driving the UI and
-// painful only for automated abuse.
+// Conservative defaults: cheap reads get a generous bucket. Run-start writes
+// must still allow normal benchmark batches: the UI can legitimately issue one
+// POST /api/run per selected task/model, so a 14-task smoke lane should not
+// trip the local abuse guard before provider-side limits get a chance to speak.
 export const RATE_READ: RateLimitRule = { name: "read", limit: 120, windowMs: 60_000 };
-export const RATE_RUN: RateLimitRule = { name: "run", limit: 10, windowMs: 60_000 };
+export const RATE_RUN: RateLimitRule = { name: "run", limit: 120, windowMs: 60_000 };
 export const RATE_INGEST: RateLimitRule = { name: "ingest", limit: 30, windowMs: 60_000 };

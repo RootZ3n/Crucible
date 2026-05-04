@@ -22,6 +22,12 @@ function mockFetch(opts?: { ollamaDown?: boolean; openrouterDown?: boolean; open
         ],
       }), { status: 200 });
     }
+    if (url.includes("openrouter.ai") && url.endsWith("/key")) {
+      if (opts?.openrouterDown) throw new Error("Network error");
+      const auth = (init?.headers as Record<string, string>)?.["Authorization"] ?? "";
+      if (!auth.includes("Bearer")) return new Response("Unauthorized", { status: 401 });
+      return new Response(JSON.stringify({ data: { label: "test-key" } }), { status: 200 });
+    }
     if (url.includes("openrouter.ai") && url.endsWith("/models")) {
       if (opts?.openrouterDown) throw new Error("Network error");
       const auth = (init?.headers as Record<string, string>)?.["Authorization"] ?? "";

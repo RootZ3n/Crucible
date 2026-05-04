@@ -192,6 +192,24 @@ describe("provider-registry: routing / resolveByModelId", () => {
   });
 });
 
+describe("provider-registry: adapter config handoff", () => {
+  it("passes env-key credentials and base URL from a registered OpenRouter model into adapter init", async () => {
+    const p = registry.addProvider({ presetId: "openrouter", label: "OR", apiKeyEnv: "OPENROUTER_API_KEY" });
+    registry.addModel({ providerConfigId: p.id, modelId: "deepseek/deepseek-v4-pro" });
+    process.env["OPENROUTER_API_KEY"] = "test-openrouter-key";
+    const adapters = await import("../adapters/registry.js");
+    const instantiated = await adapters.instantiateAdapterForRun({
+      adapter: "openrouter",
+      provider: "openrouter",
+      model: "deepseek/deepseek-v4-pro",
+    });
+    assert.equal((instantiated.config as { api_key?: string }).api_key, "test-openrouter-key");
+    assert.equal((instantiated.config as { base_url?: string }).base_url, "https://openrouter.ai/api/v1");
+    await instantiated.adapter.teardown();
+    delete process.env["OPENROUTER_API_KEY"];
+  });
+});
+
 describe("provider-registry: serialization never leaks inline secrets", () => {
   it("serializeProviderForClient masks inline apiKey as ****<last4>", () => {
     const p = registry.addProvider({ presetId: "openrouter", label: "OR", apiKey: "sk-or-v1-ABCDEFGHIJKLMN" });
