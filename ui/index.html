@@ -49,10 +49,23 @@ const DEFAULT_MODEL_GROUPS=[
     {id:'qwen3.5:4b',label:'qwen3.5:4b'},
     {id:'qwen2.5:7b-instruct',label:'qwen2.5:7b-instruct'}
   ]},
+  // OpenRouter is the primary multi-publisher routing hub — every model in
+  // this curated shortlist is selected from the operator's published wishlist
+  // and is the same canonical set surfaced on every lane tab (Benchmark,
+  // Poison, Build, Safety, Memory, Personality). Adding/removing here changes
+  // every tab because there is exactly one discovery pipeline:
+  // DEFAULT_MODEL_GROUPS → mergedModelGroups() → filteredModelGroupsForTab()
+  // → renderModelOptions(). Pinned by tests/ui-model-parity.test.ts.
   {key:'openrouter',label:'OpenRouter',providerId:'openrouter',adapterId:'openrouter',kind:'cloud',models:[
+    {id:'xiaomi/mimo-v2.5',label:'xiaomi/mimo-v2.5 (MiMo v2.5)'},
+    {id:'xiaomi/mimo-v2.5-pro',label:'xiaomi/mimo-v2.5-pro (MiMo v2.5 Pro)'},
     {id:'xiaomi/mimo-v2-pro',label:'xiaomi/mimo-v2-pro (MiMo V2 Pro)'},
     {id:'xiaomi/mimo-v2-flash',label:'xiaomi/mimo-v2-flash (MiMo Flash)'},
-    {id:'xiaomi/mimo-v2-omni',label:'xiaomi/mimo-v2-omni (MiMo Omni)'}
+    {id:'xiaomi/mimo-v2-omni',label:'xiaomi/mimo-v2-omni (MiMo Omni)'},
+    {id:'moonshotai/kimi-k2.6',label:'moonshotai/kimi-k2.6 (Kimi K2.6)'},
+    {id:'qwen/qwen-3.6-plus',label:'qwen/qwen-3.6-plus (Qwen 3.6 Plus)'},
+    {id:'zhipu/glm-5.1',label:'zhipu/glm-5.1 (GLM 5.1)'},
+    {id:'x-ai/grok-4.3',label:'x-ai/grok-4.3 (Grok 4.3)'}
   ]},
   {key:'modelstudio',label:'ModelStudio',providerId:'modelstudio',adapterId:'squidley',kind:'cloud',models:[
     {id:'qwen3.6-plus',label:'qwen3.6-plus'},
@@ -949,13 +962,24 @@ function batchReasonItems(run){
 function taskOptionsForTab(tabKey){const config=TAB_CONFIG[tabKey];return state.tasks.filter((task)=>!config.taskFamilies.length||config.taskFamilies.includes(task.family)).sort((a,b)=>String(a.id).localeCompare(String(b.id)))}
 function currentTask(tabKey){const tabState=state.tabData[tabKey]||defaultTabState();return taskOptionsForTab(tabKey).find((task)=>task.id===tabState.selectedTask)||null}
 function syncRouting(tabKey){
+  // Returns the routing implied by the current selection for display only.
+  // Crucially does NOT mutate tab.selectedProvider/selectedAdapter — those
+  // are USER-driven filters consumed by filteredModelGroupsForTab(). If we
+  // wrote them here, selecting a single-provider set (the seeded default is
+  // one cloud model) would silently lock the MODELS dropdown to that
+  // provider and hide every other provider's models on that tab. That
+  // exact aliasing is what made Poison/Build/Safety/Memory look like they
+  // were "missing" providers compared to Benchmark — the only difference
+  // was which tab the operator happened to mix providers on. Run dispatch
+  // does NOT consult selectedProvider/selectedAdapter (see runSingle, which
+  // calls deriveRoutingForModel per modelId), so this field is purely a
+  // user filter.
   const tab=state.tabData[tabKey]||defaultTabState();
   const models=tab.selectedModels||[];
   if(!models.length)return{provider:'',adapter:''};
   const routes=models.map(deriveRoutingForModel);
   const provider=routes.every((r)=>r.providerId===routes[0].providerId)?routes[0].providerId:'mixed';
   const adapter=routes.every((r)=>r.adapterId===routes[0].adapterId)?routes[0].adapterId:'mixed';
-  state.tabData[tabKey]={...tab,selectedProvider:provider,selectedAdapter:adapter};
   return{provider,adapter};
 }
 function reconcileTabSelection(tabKey,tabState){
@@ -1577,12 +1601,24 @@ function renderTelemetryRow(focused){
   </div>`;
 }
 function modelSelectionNote(tabKey){
-  const models=(state.tabData[tabKey]?.selectedModels)||[];
-  if(!models.length)return'No models selected.';
+  const tab=state.tabData[tabKey]||defaultTabState();
+  const models=tab.selectedModels||[];
+  const providerFilter=normalizeId(tab.selectedProvider);
+  const adapterFilter=normalizeId(tab.selectedAdapter);
+  const filterActive=(providerFilter&&providerFilter!=='mixed')||(adapterFilter&&adapterFilter!=='mixed');
+  // When a PROVIDER/ADAPTER filter is active, the MODELS dropdown is
+  // intentionally narrowed and other providers' models are hidden. Surface
+  // that clearly so an operator never confuses "filter active" with
+  // "missing models" (the bug that originally motivated this fix).
+  const filterNote=filterActive
+    ? `Filter active: showing only ${providerFilter&&providerFilter!=='mixed'?providerFilter:''}${providerFilter&&adapterFilter&&providerFilter!=='mixed'&&adapterFilter!=='mixed'?' · ':''}${adapterFilter&&adapterFilter!=='mixed'?adapterFilter:''}. Pick "Mixed by model selection" above to see all providers/models.`
+    : '';
+  if(!models.length)return filterNote||'No models selected.';
   const routes=models.map(deriveRoutingForModel);
   const localCount=routes.filter((r)=>r.kind==='local').length;
   const cloudCount=routes.filter((r)=>r.kind==='cloud').length;
-  return `${models.length} model${models.length===1?'':'s'} selected: ${localCount} local and ${cloudCount} cloud.`;
+  const base=`${models.length} model${models.length===1?'':'s'} selected: ${localCount} local and ${cloudCount} cloud.`;
+  return filterNote?`${base} ${filterNote}`:base;
 }
 function modelInventoryNote(){
   const localInstalled=(state.liveModels||[]).filter((model)=>normalizeId(model.provider)==='ollama'||normalizeId(model.adapter)==='ollama').length;
@@ -2138,8 +2174,22 @@ async function handleRunAll(tabKey){
 
 function renderTabs(){return Object.values(TAB_CONFIG).map((tab)=>`<button class="tab ${state.activeTab===tab.key?'active':''}" onclick="setActiveTab('${tab.key}')">${esc(tab.label)}</button>`).join('')}
 function renderTaskOptions(tabKey){const tabState=state.tabData[tabKey]||defaultTabState();return taskOptionsForTab(tabKey).map((task)=>`<option value="${esc(task.id)}" ${tabState.selectedTask===task.id?'selected':''}>${esc(displayTestName(task))} (${esc(task.id)}) · ${esc(TASK_FAMILY_LABELS[task.family]||task.family)} · ${esc(task.difficulty)}</option>`).join('')}
-function renderAdapterOptions(tabKey){const tabState=state.tabData[tabKey]||defaultTabState();const options=[{id:'mixed',label:'Mixed by model selection'}].concat((state.adapters||[]).map((a)=>({id:a.id||a.adapter||a.key||'',label:a.label||a.name||a.id||a.key||''})));return options.map((opt)=>`<option value="${esc(opt.id)}" ${normalizeId(tabState.selectedAdapter)===normalizeId(opt.id)?'selected':''}>${esc(opt.label)}</option>`).join('')}
-function renderProviderOptions(tabKey){const tabState=state.tabData[tabKey]||defaultTabState();const options=[{id:'mixed',label:'Mixed by model selection'}].concat(mergedProviders());return options.map((provider)=>`<option value="${esc(provider.id)}" ${normalizeId(tabState.selectedProvider)===normalizeId(provider.id)?'selected':''}>${esc(provider.label)}</option>`).join('')}
+function renderAdapterOptions(tabKey){
+  const tabState=state.tabData[tabKey]||defaultTabState();
+  // Treat empty selectedAdapter as the 'mixed' default so the dropdown
+  // visibly reads "Mixed by model selection" out-of-the-box. Without this
+  // mapping the dropdown shows nothing as selected and the operator may
+  // think the lane has an exotic preset locked in.
+  const current=normalizeId(tabState.selectedAdapter)||'mixed';
+  const options=[{id:'mixed',label:'Mixed by model selection'}].concat((state.adapters||[]).map((a)=>({id:a.id||a.adapter||a.key||'',label:a.label||a.name||a.id||a.key||''})));
+  return options.map((opt)=>`<option value="${esc(opt.id)}" ${current===normalizeId(opt.id)?'selected':''}>${esc(opt.label)}</option>`).join('');
+}
+function renderProviderOptions(tabKey){
+  const tabState=state.tabData[tabKey]||defaultTabState();
+  const current=normalizeId(tabState.selectedProvider)||'mixed';
+  const options=[{id:'mixed',label:'Mixed by model selection'}].concat(mergedProviders());
+  return options.map((provider)=>`<option value="${esc(provider.id)}" ${current===normalizeId(provider.id)?'selected':''}>${esc(provider.label)}</option>`).join('');
+}
 function renderModelOptions(tabKey){
   const tabState=state.tabData[tabKey]||defaultTabState();
   const selected=tabState.selectedModels||[];
