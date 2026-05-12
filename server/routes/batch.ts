@@ -13,7 +13,6 @@ import { storeBundle } from "../../core/bundle.js";
 import { DETERMINISTIC_JUDGE_METADATA } from "../../core/judge.js";
 import { summarizeRunSet } from "../contracts.js";
 import { runSynthesis } from "../../core/synthesis.js";
-import { requireAuth } from "../auth.js";
 import { activeRuns, broadcastSSE, sseClients, markRunSettled } from "./run.js";
 import { resolveByModelIdWithHint } from "../../core/provider-registry.js";
 
@@ -28,7 +27,6 @@ function resolveRequestedDispatch(adapter: string, provider: string | null, mode
 }
 
 export async function handleRunBatch(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!requireAuth(req, res)) return;
   const parsed = await parseJsonBody<unknown>(req);
   if (!parsed.ok) { sendJSON(res, 400, { error: parsed.error }); return; }
   const v = validateRunBatchRequest(parsed.value);

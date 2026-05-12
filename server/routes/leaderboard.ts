@@ -27,7 +27,6 @@ import {
   type ScoreFamily,
   type VerumIngestRequest,
 } from "../../types/scores.js";
-import { requireAuth } from "../auth.js";
 
 function scoreFamilyForTaskFamily(taskFamily: string): ScoreFamily | null {
   for (const family of SCORE_FAMILIES) {
@@ -352,7 +351,6 @@ function buildScopedLeaderboardEntries(bundles: EvidenceBundle[]): LeaderboardEn
 }
 
 export async function handleScoresSync(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!requireAuth(req, res)) return;
   const parsed = await parseJsonBody<unknown>(req);
   if (!parsed.ok) { sendJSON(res, 400, { ok: false, stored: 0, errors: [parsed.error] }); return; }
   const v = validateScoresSyncRequest(parsed.value);
@@ -372,7 +370,6 @@ export async function handleScoresSync(req: IncomingMessage, res: ServerResponse
 }
 
 export async function handleVerumIngest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!requireAuth(req, res)) return;
   const parsed = await parseJsonBody<VerumIngestRequest>(req);
   if (!parsed.ok) { sendJSON(res, 400, { ok: false, stored: 0, errors: [parsed.error], source: "verum" }); return; }
   const body = parsed.value;
@@ -392,7 +389,6 @@ export async function handleVerumIngest(req: IncomingMessage, res: ServerRespons
 }
 
 export async function handleScoresQuery(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-  if (!requireAuth(req, res)) return;
   const modelId = url.searchParams.get("modelId") ?? undefined;
   const family = url.searchParams.get("family") ?? undefined;
   const taskId = url.searchParams.get("taskId") ?? undefined;
@@ -405,7 +401,6 @@ export async function handleScoresQuery(req: IncomingMessage, res: ServerRespons
 }
 
 export async function handleLeaderboard(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-  if (!requireAuth(req, res)) return;
   const scope = resolveLaneScope(url);
   if (scope.taskFamilies && scope.taskFamilies.length > 0) {
     // Lane-scoped path: filter the full bundle set by the requested task
@@ -440,7 +435,6 @@ export async function handleLeaderboard(req: IncomingMessage, res: ServerRespons
 }
 
 export async function handleLeaderboardQuarantine(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-  if (!requireAuth(req, res)) return;
   const scope = resolveLaneScope(url);
   const scopedBundles = scope.taskFamilies && scope.taskFamilies.length > 0
     ? filterBundlesByTaskFamilies(loadBundles(), scope.taskFamilies)
@@ -469,7 +463,6 @@ export async function handleLeaderboardQuarantine(req: IncomingMessage, res: Ser
 }
 
 export async function handleSynthesis(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!requireAuth(req, res)) return;
   const parsed = await parseJsonBody<unknown>(req);
   if (!parsed.ok) { sendJSON(res, 400, { error: parsed.error }); return; }
   const v = validateSynthesisRequest(parsed.value);

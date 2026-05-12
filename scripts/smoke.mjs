@@ -38,7 +38,6 @@ const env = {
   CRUCIBLE_STATE_ROOT: stateDir,
   CRUCIBULUM_STATE_DIR: stateDir,
   CRUCIBLE_HMAC_KEY: "crucible-smoke-local-only-key",
-  CRUCIBLE_ALLOW_LOCAL: "true",
 };
 
 try {

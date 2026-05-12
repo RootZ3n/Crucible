@@ -13,7 +13,6 @@
  *   PATCH  /api/registry/models/:id           — edit displayName / enabled / tags / notes
  *   DELETE /api/registry/models/:id           — remove
  *
- * All write routes require auth (routed through requireAuth in server/app.ts).
  * Connection tests are wrapped in a hard timeout so a misconfigured provider
  * can't hang the request.
  */

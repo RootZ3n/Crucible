@@ -11,40 +11,37 @@ Security fixes are accepted for the current public release line.
 
 ## Reporting Security Issues
 
-Please do not file public issues for suspected secrets exposure, authentication bypasses, unsafe bundle ingestion, path traversal, or signature/provenance bypasses.
+Please do not file public issues for suspected secrets exposure, unsafe bundle ingestion, path traversal, or signature/provenance bypasses.
 
 Report security-sensitive findings privately to the maintainers through the project’s preferred private contact channel. If no private contact has been published yet, open a minimal public issue that says a private security report is needed, without including exploit details, secrets, run bundles, prompts, or logs.
 
 ## Trust Model
 
-Crucible is an evidence viewer and comparison layer. It can rank only evidence that passes the configured eligibility checks. Default public leaderboards exclude tampered, forged, legacy, unsigned, unauthenticated, malformed, mock/demo, and unverified bundles.
+Crucible is an evidence viewer and comparison layer. It can rank only evidence that passes the configured eligibility checks. Default public leaderboards exclude tampered, forged, legacy, unsigned, malformed, mock/demo, and unverified bundles.
 
 HMAC signatures, bundle hashes, provenance fields, and quarantine labels help operators detect local tampering or stale evidence. They do not prove that an upstream provider behaved honestly, that a model is safe, or that a run was performed in a fully trusted environment.
 
 Crucible verifies bundle integrity (hash + HMAC), not provider honesty. A signed bundle proves the bundle content has not been modified since signing; it does not prove the upstream model provider ran the task faithfully or that the operator did not fabricate results before signing. Crucible does not defend against Sybil attacks or fake-but-signed bundles from an untrusted operator.
 
-## Leaderboard Authentication
+## No Built-In Authentication
 
-All leaderboard and score-query endpoints require authentication:
+**Crucible has no built-in authentication.** There are no tokens, sign-in screens, pairing flows, or session gates. Anything that can reach the bound port can call every API endpoint, including the leaderboard, score-query, registry CRUD, and run dispatch routes.
 
-- `GET /api/leaderboard`
-- `GET /api/scores/leaderboard`
-- `GET /leaderboard`
-- `GET /api/leaderboard/quarantine`
-- `GET /api/scores`
+This app assumes it is running on a trusted private network. The default bind is `127.0.0.1`, which keeps it reachable only from the same machine. Do not expose it directly to the public internet without adding your own access control.
 
-Unauthenticated requests receive a `401` JSON response. Loopback clients are authenticated automatically when `CRUCIBLE_ALLOW_LOCAL` is not `"false"` (the default). Remote clients must present a valid `Authorization: Bearer <token>` header.
+## Local Server Binding And Network-Layer Access Control
 
-## Local Server Binding
+Crucible is designed for single-operator local use. If you need access from another device, put a private-network gate in front of it — pick whichever fits your setup:
 
-Crucible is designed primarily for local operator use. Loopback clients may bootstrap without a token unless local bootstrap is disabled. Remote clients must authenticate.
+- run it behind Tailscale or a VPN and rely on tailnet / VPN-level identity;
+- bind to `0.0.0.0` only when there is a firewall in front and the LAN is trusted;
+- run a reverse proxy (nginx, Caddy, Cloudflare Tunnel, etc.) that handles authentication before forwarding to Crucible.
 
-For shared hosts, tunnels, reverse proxies, mobile access, or public networks:
+Operator responsibilities for any deployment beyond the loopback default:
 
-- set a strong `CRUCIBLE_API_TOKEN` or `CRUCIBULUM_API_TOKEN`;
-- set `CRUCIBLE_ALLOW_LOCAL=false` or `CRUCIBULUM_ALLOW_LOCAL=false` when loopback bootstrap should be disabled;
-- bind and proxy deliberately;
-- protect the state directory containing auth tokens and provider registry data.
+- choose a network-layer access-control mechanism and verify it is actually enforcing;
+- protect the state directory and `runs/` from unauthorized readers;
+- bind and proxy deliberately — never assume Crucible itself is gating requests.
 
 The included `crucible.service` is an advanced Linux/systemd example only. Review the user, working directory, state path, file permissions, and network exposure before using it.
 

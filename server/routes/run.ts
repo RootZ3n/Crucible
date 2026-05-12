@@ -13,7 +13,6 @@ import { storeBundle } from "../../core/bundle.js";
 import { DETERMINISTIC_JUDGE_METADATA } from "../../core/judge.js";
 import { summarizeRunSet, type CrucibleLink } from "../contracts.js";
 import { writeCrucibleLink } from "../validation-links.js";
-import { requireAuth } from "../auth.js";
 import { isConversationalTask } from "../../core/conversational-runner.js";
 import { normalizeBundleVerdict } from "../../core/verdict.js";
 import type { StructuredProviderError } from "../../types/provider-error.js";
@@ -93,7 +92,6 @@ export function broadcastSSE(runId: string, event: string, data: unknown): void 
 }
 
 export async function handleRunsList(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-  if (!requireAuth(req, res)) return;
   const scope = resolveLaneScope(url);
   const allBundles = loadBundles();
   const bundles = filterBundlesByTaskFamilies(allBundles, scope.taskFamilies);
@@ -160,7 +158,6 @@ export async function handleRunsList(req: IncomingMessage, res: ServerResponse, 
 }
 
 export async function handleRunSummary(req: IncomingMessage, res: ServerResponse, path: string): Promise<void> {
-  if (!requireAuth(req, res)) return;
   const id = path.replace("/api/runs/", "").replace("/summary", "");
   const bundle = getBundleById(id);
   if (!bundle) {
@@ -172,7 +169,6 @@ export async function handleRunSummary(req: IncomingMessage, res: ServerResponse
 }
 
 export async function handleRunGet(req: IncomingMessage, res: ServerResponse, path: string): Promise<void> {
-  if (!requireAuth(req, res)) return;
   const id = path.replace("/api/runs/", "");
   const bundle = getBundleById(id);
   if (!bundle) {
@@ -184,14 +180,12 @@ export async function handleRunGet(req: IncomingMessage, res: ServerResponse, pa
 }
 
 export async function handleStats(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-  if (!requireAuth(req, res)) return;
   const scope = resolveLaneScope(url);
   const bundles = filterBundlesByTaskFamilies(loadBundles(), scope.taskFamilies);
   sendJSON(res, 200, { ...getStats(bundles), task_families: scope.taskFamilies, scope_key: scope.scopeKey });
 }
 
 export async function handleReceipts(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-  if (!requireAuth(req, res)) return;
   const scope = resolveLaneScope(url);
   const bundles = filterBundlesByTaskFamilies(loadBundles(), scope.taskFamilies);
   bundles.sort((a, b) => new Date(b.environment.timestamp_start).getTime() - new Date(a.environment.timestamp_start).getTime());
@@ -260,7 +254,6 @@ export async function handleReceipts(req: IncomingMessage, res: ServerResponse, 
 }
 
 export async function handleCompare(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-  if (!requireAuth(req, res)) return;
   const taskId = url.searchParams.get("task") ?? "";
   const suiteId = url.searchParams.get("suite") ?? "v1";
   const scope = resolveLaneScope(url);
@@ -338,7 +331,6 @@ export async function handleRunStatus(req: IncomingMessage, res: ServerResponse,
 }
 
 export async function handleRunPost(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!requireAuth(req, res)) return;
   gcActiveRuns();
   const parsed = await parseJsonBody<unknown>(req);
   if (!parsed.ok) { sendJSON(res, 400, { error: parsed.error }); return; }
@@ -573,7 +565,6 @@ export async function handleRunLive(req: IncomingMessage, res: ServerResponse, p
 }
 
 export async function handleCrucibleLink(req: IncomingMessage, res: ServerResponse, path: string): Promise<void> {
-  if (!requireAuth(req, res)) return;
   const id = path.slice("/api/runs/".length, -"/crucible-link".length);
   // Defense in depth: even though the ID must resolve to a real bundle on disk,
   // never write a file at a path derived from unsanitized user input.

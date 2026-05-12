@@ -112,6 +112,10 @@ const CATEGORY_COPY={
 const state={
   activeTab:localStorage.getItem('crucibulum-active-tab')||'dashboard',
   viewMode:localStorage.getItem('crucibulum-view-mode')||'expert',
+  resultsView:localStorage.getItem('crucibulum-results-view')||'simple',
+  drilldownModel:null,
+  drilldownPage:1,
+  drilldownSort:'newest',
   tasks:[],
   adapters:[],
   providers:[],
@@ -153,6 +157,257 @@ const fmtDate=(v)=>{if(!v)return'Never';const d=new Date(v);return Number.isNaN(
 const fmtMs=(v)=>{const ms=Number(v??0);if(!Number.isFinite(ms)||ms<=0)return'0 ms';return ms>=1000?`${(ms/1000).toFixed(2)} s`:`${Math.round(ms)} ms`};
 function scorePct(value){const n=Number(value??0);if(!Number.isFinite(n))return 0;return Math.max(0,Math.min(100,Math.round(n<=1?n*100:n)))}
 function fmtPct(value){return `${scorePct(value)}%`}
+function safeScore(value){const n=Number(value??0);return Number.isFinite(n)?Math.max(0,Math.min(100,Math.round(n<=1?n*100:n))):0}
+function safeStr(value){const s=String(value??'');return(s==='undefined'||s==='null'||s==='NaN')?'':s}
+function safeNum(value){const n=Number(value??0);return Number.isFinite(n)?n:0}
+function kbClick(fnCall){return` role="button" tabindex="0" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();${fnCall}}"` }
+
+function setResultsView(mode){
+  const valid=['simple','table','chart'];
+  state.resultsView=valid.includes(mode)?mode:'simple';
+  localStorage.setItem('crucibulum-results-view',state.resultsView);
+  render();
+}
+
+// ─── Export shaping ────────────────────────────────────────────────────────
+// Pure functions that transform reviewSummary rollups into export-ready rows.
+// No mock data — only real indexed run data. If a field is unavailable, it is
+// omitted or set to null rather than fabricated.
+function shapeExportRows(tabKey){
+  const summary=reviewSummary(tabKey);
+  const scope=laneScopeDescriptor(tabKey);
+  const entries=summary.rollups;
+  if(!entries.length)return[];
+  return entries.map((entry,i)=>{
+    const failRate=entry.runs>0?Math.round((safeNum(entry.failures)/entry.runs)*100):0;
+    return{
+      rank:i+1,
+      model:safeStr(entry.model),
+      provider:safeStr(entry.provider),
+      score:safeScore(entry.avgOverall),
+      pass_rate:safeNum(entry.passRate),
+      runs:safeNum(entry.runs),
+      critical_failure_rate:failRate,
+      cost_avg:entry.costAvg>0?Number(entry.costAvg.toFixed(4)):null,
+      duration_avg_ms:entry.durationAvg>0?Math.round(entry.durationAvg):null,
+      sample_adequate:entry.sampleAdequate===true,
+      scope:scope.scopeLabel,
+      scope_kind:scope.kind,
+      lane:scope.tabLabel,
+      provisional:!!scope.provisional
+    };
+  });
+}
+
+function exportFileName(tabKey,ext){
+  const scope=laneScopeDescriptor(tabKey);
+  const lane=scope.tabLabel.toLowerCase().replace(/[^a-z0-9]+/g,'-');
+  const ts=new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
+  return`crucible-${lane}-${ts}.${ext}`;
+}
+
+function exportAsJSON(tabKey){
+  const rows=shapeExportRows(tabKey);
+  if(!rows.length)return;
+  const scope=laneScopeDescriptor(tabKey);
+  const payload={
+    exported_at:new Date().toISOString(),
+    tool:'crucible',
+    scope:scope.scopeLabel,
+    scope_kind:scope.kind,
+    lane:scope.tabLabel,
+    total_runs:scope.sampleSize,
+    provisional:!!scope.provisional,
+    models:rows
+  };
+  const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=exportFileName(tabKey,'json');
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function exportAsCSV(tabKey){
+  const rows=shapeExportRows(tabKey);
+  if(!rows.length)return;
+  const headers=['rank','model','provider','score','pass_rate','runs','critical_failure_rate','cost_avg','duration_avg_ms','sample_adequate','scope','scope_kind','lane','provisional'];
+  const csvEscape=(v)=>{const s=String(v??'');return s.includes(',')||s.includes('"')||s.includes('\n')?'"'+s.replace(/"/g,'""')+'"':s};
+  const lines=[headers.join(',')];
+  for(const row of rows){
+    lines.push(headers.map(h=>csvEscape(row[h])).join(','));
+  }
+  const blob=new Blob([lines.join('\n')],{type:'text/csv;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=exportFileName(tabKey,'csv');
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ─── Model drilldown ──────────────────────────────────────────────────────
+// Per-model run-level detail view. Shows every run for a specific model
+// within the current tab scope. Only real indexed data — no fabrication.
+const DRILLDOWN_PAGE_SIZE=25;
+const DRILLDOWN_SORT_MODES=['newest','lowest','critical'];
+
+function focusModelDrilldown(tabKey,modelId){
+  state.drilldownModel=safeStr(modelId);
+  state.drilldownPage=1;
+  render();
+  const el=document.getElementById('model-drilldown');
+  if(el)el.scrollIntoView({behavior:'smooth',block:'start'});
+}
+function clearModelDrilldown(){
+  state.drilldownModel=null;
+  state.drilldownPage=1;
+  state.drilldownSort='newest';
+  render();
+}
+function drilldownShowMore(){
+  state.drilldownPage=(state.drilldownPage||1)+1;
+  render();
+}
+function setDrilldownSort(mode){
+  state.drilldownSort=DRILLDOWN_SORT_MODES.includes(mode)?mode:'newest';
+  state.drilldownPage=1;
+  render();
+}
+// Clicking a drilldown run card opens the existing evidence inspector for
+// that exact run. Reuses focusRunFromHistory / focusDashboardRun which call
+// setFocusedRun → normalizeRunForDisplay → hydrateFocusedRun. No duplicate
+// inspector — the run appears in the existing inspection-shell panel.
+function focusDrilldownRun(tabKey,runId){
+  if(tabKey==='dashboard'){
+    focusDashboardRun(runId);
+  } else {
+    focusRunFromHistory(tabKey,runId);
+  }
+  // Scroll to the focused run panel after render settles
+  setTimeout(()=>{
+    try{
+      const panels=document.querySelectorAll('.inspection-shell');
+      const target=panels[panels.length-1];
+      if(target)target.scrollIntoView({behavior:'smooth',block:'start'});
+    }catch(e){}
+  },80);
+}
+
+function shapeModelDrilldown(tabKey,modelId,sortMode){
+  const id=normalizeId(modelId);
+  if(!id)return[];
+  const runs=scopeNormalizedRuns(tabKey).filter(r=>normalizeId(r.model)===id);
+  const shaped=runs.map(r=>{
+    const cats=(r.categories||[]).filter(c=>!c.synthetic);
+    const catSummary=cats.length?cats.map(c=>`${safeStr(c.name)} ${safeScore(c.score)}%`).join(', '):'';
+    return{
+      runId:safeStr(r.runId||r.bundleId||r.id),
+      bundleHash:safeStr(r.bundleHash).slice(0,16)||'',
+      model:safeStr(r.model),
+      provider:safeStr(r.provider),
+      score:safeScore(r.overall),
+      pass:r.pass===true,
+      verdictLabel:safeStr(r.verdictLabel||r.completionState||'UNKNOWN'),
+      verdictClass:safeStr(r.verdictClass||'dim'),
+      isModelFailure:!!r.isModelFailure,
+      isInfraIssue:!!r.isInfraIssue,
+      isCriticalFailure:safeScore(r.overall)<55,
+      task:safeStr(r.task),
+      family:safeStr(r.family),
+      lane:safeStr(TAB_CONFIG[tabKey]?.label||tabKey),
+      categorySummary:catSummary,
+      timestamp:safeStr(r.timestamp),
+      evidenceSummary:safeStr(r.verdictSummary||(r.details&&r.details[0]?.message)||''),
+      hasReceipt:!!(r.bundleHash),
+      overallKnown:r.overallKnown!==false
+    };
+  });
+  const sort=sortMode||'newest';
+  if(sort==='lowest') shaped.sort((a,b)=>a.score-b.score||new Date(b.timestamp||0).getTime()-new Date(a.timestamp||0).getTime());
+  else if(sort==='critical') shaped.sort((a,b)=>(b.isCriticalFailure?1:0)-(a.isCriticalFailure?1:0)||a.score-b.score||new Date(b.timestamp||0).getTime()-new Date(a.timestamp||0).getTime());
+  else shaped.sort((a,b)=>new Date(b.timestamp||0).getTime()-new Date(a.timestamp||0).getTime());
+  return shaped;
+}
+
+function drilldownVisibleSlice(allRows,page){
+  const limit=(page||1)*DRILLDOWN_PAGE_SIZE;
+  return{visible:allRows.slice(0,limit),total:allRows.length,hasMore:allRows.length>limit};
+}
+
+function shapeDrilldownExportRows(tabKey,modelId){
+  return shapeModelDrilldown(tabKey,modelId).map((r,i)=>({
+    index:i+1,
+    run_id:r.runId,
+    bundle_hash:r.bundleHash||null,
+    model:r.model,
+    provider:r.provider,
+    score:r.score,
+    pass:r.pass,
+    verdict:r.verdictLabel,
+    is_critical_failure:r.isCriticalFailure,
+    is_model_failure:r.isModelFailure,
+    is_infra_issue:r.isInfraIssue,
+    task:r.task,
+    family:r.family,
+    lane:r.lane,
+    category_summary:r.categorySummary||null,
+    timestamp:r.timestamp||null,
+    evidence_summary:r.evidenceSummary||null,
+    has_receipt:r.hasReceipt
+  }));
+}
+
+function exportDrilldownJSON(tabKey,modelId){
+  const rows=shapeDrilldownExportRows(tabKey,modelId);
+  if(!rows.length)return;
+  const scope=laneScopeDescriptor(tabKey);
+  const payload={
+    exported_at:new Date().toISOString(),
+    tool:'crucible',
+    export_type:'model_drilldown',
+    model:safeStr(modelId),
+    scope:scope.scopeLabel,
+    lane:scope.tabLabel,
+    total_runs:rows.length,
+    runs:rows
+  };
+  const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  const safe=safeStr(modelId).toLowerCase().replace(/[^a-z0-9]+/g,'-').slice(0,30);
+  a.download=exportFileName(tabKey,`${safe}.json`);
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function exportDrilldownCSV(tabKey,modelId){
+  const rows=shapeDrilldownExportRows(tabKey,modelId);
+  if(!rows.length)return;
+  const headers=['index','run_id','bundle_hash','model','provider','score','pass','verdict','is_critical_failure','is_model_failure','is_infra_issue','task','family','lane','category_summary','timestamp','evidence_summary','has_receipt'];
+  const csvEscape=(v)=>{const s=String(v??'');return s.includes(',')||s.includes('"')||s.includes('\n')?'"'+s.replace(/"/g,'""')+'"':s};
+  const lines=[headers.join(',')];
+  for(const row of rows)lines.push(headers.map(h=>csvEscape(row[h])).join(','));
+  const blob=new Blob([lines.join('\n')],{type:'text/csv;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  const safe=safeStr(modelId).toLowerCase().replace(/[^a-z0-9]+/g,'-').slice(0,30);
+  a.download=exportFileName(tabKey,`${safe}.csv`);
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 function apiUrl(path,scope){
   const url=new URL(path,window.location.origin);
   if(Array.isArray(scope)&&scope.length)url.searchParams.set('families',scope.join(','));
@@ -726,15 +981,10 @@ function reconcileTabSelection(tabKey,tabState){
   return state.tabData[tabKey];
 }
 
-// ── Auth: token storage + centralized fetch ─────────────────────────────
-const AUTH_TOKEN_KEY='crucibulum-auth-token';
-function getStoredToken(){try{return localStorage.getItem(AUTH_TOKEN_KEY)||''}catch{return ''}}
-function setStoredToken(t){try{localStorage.setItem(AUTH_TOKEN_KEY,t)}catch{}}
-function clearStoredToken(){try{localStorage.removeItem(AUTH_TOKEN_KEY)}catch{}}
-
-// AuthError is thrown by fetchJSON on 401 so callers can branch without
-// parsing error strings. Boot uses it to show the auth-required screen.
-class AuthError extends Error{constructor(msg,reason){super(msg);this.name='AuthError';this.reason=reason||'unauthorized'}}
+// ── Centralized fetch ─────────────────────────────────────────────────────
+// No built-in auth. Operator owns network-layer access control (loopback
+// bind, Tailscale, VPN, firewall, reverse-proxy auth) — the UI does not
+// send Authorization headers, store tokens, or render a sign-in screen.
 
 // HTTPError preserves the structured JSON body on non-2xx responses so the
 // caller can surface a specific reason (e.g. 422 adapter_cannot_run_task) instead
@@ -749,17 +999,7 @@ class HTTPError extends Error{
 }
 
 async function fetchJSON(url,options){
-  const opts={...(options||{})};
-  const headers=new Headers(opts.headers||{});
-  const token=getStoredToken();
-  if(token&&!headers.has('Authorization'))headers.set('Authorization','Bearer '+token);
-  opts.headers=headers;
-  const res=await fetch(url,opts);
-  if(res.status===401){
-    let reason='unauthorized';
-    try{const body=await res.clone().json();if(body&&typeof body.reason==='string')reason=body.reason}catch{}
-    throw new AuthError('unauthorized',reason);
-  }
+  const res=await fetch(url,options||{});
   if(!res.ok){
     const text=await res.text();
     let body=null;
@@ -2419,6 +2659,129 @@ function renderOverviewCards(tabKey){
     ${summary.winners.length?`<div class="winner-strip">${summary.winners.slice(0,8).map((winner)=>`<div class="winner-chip"><span class="winner-label">${esc(winner.label)}</span><span class="winner-model">${esc(winner.model)}</span><span class="winner-score">${winner.score}%</span></div>`).join('')}</div>`:''}
   </section>`;
 }
+function renderRankedResults(tabKey){
+  const summary=reviewSummary(tabKey);
+  const entries=summary.rollups.slice(0,10);
+  if(!entries.length)return'';
+  const scope=laneScopeDescriptor(tabKey);
+  const mode=state.resultsView||'simple';
+  const hasData=entries.length>0;
+  const top=Math.max(...entries.map(e=>safeScore(e.avgOverall)),1);
+  const focusedModel=state.drilldownModel||null;
+
+  const toggles=`<div class="benchmark-view-toggles" role="group" aria-label="View mode"><button type="button" class="bvt-btn ${mode==='simple'?'active':''}" onclick="setResultsView('simple')" aria-pressed="${mode==='simple'}">SIMPLE</button><button type="button" class="bvt-btn ${mode==='table'?'active':''}" onclick="setResultsView('table')" aria-pressed="${mode==='table'}">TABLE</button><button type="button" class="bvt-btn ${mode==='chart'?'active':''}" onclick="setResultsView('chart')" aria-pressed="${mode==='chart'}">CHART</button></div>`;
+
+  const exportBtns=hasData
+    ?`<div class="export-group"><button type="button" class="export-btn" onclick="exportAsJSON('${esc(tabKey)}')" title="Download ranked results as JSON">JSON</button><button type="button" class="export-btn" onclick="exportAsCSV('${esc(tabKey)}')" title="Download ranked results as CSV">CSV</button></div>`
+    :`<button type="button" class="export-scaffold" disabled title="No ranked data available to export.">EXPORT</button>`;
+
+  let body='';
+  if(mode==='simple'){
+    body=`<div class="ranked-list">${entries.map((entry,i)=>{
+      const score=safeScore(entry.avgOverall);
+      const width=Math.max(6,Math.round((score/top)*100));
+      const failRate=entry.runs>0?Math.round((safeNum(entry.failures)/entry.runs)*100):0;
+      const provTag=entry.sampleAdequate===false?'<span class="tag dim" title="Under sample threshold">PROVISIONAL</span>':'';
+      const failTag=failRate>10?`<span class="tag red">${failRate}% CRIT</span>`:'';
+      const focused=focusedModel&&normalizeId(entry.model)===normalizeId(focusedModel)?'focused':'';
+      const clickFn=`focusModelDrilldown('${esc(tabKey)}','${esc(safeStr(entry.model))}')`;
+      return`<div class="ranked-row clickable ${focused}" onclick="${clickFn}"${kbClick(clickFn)} aria-label="Inspect ${esc(safeStr(entry.model))}"><div class="ranked-pos">#${i+1}</div><div class="ranked-model">${esc(safeStr(entry.model))}</div><div class="ranked-bar"><div class="ranked-fill" style="width:${width}%"></div></div><div class="ranked-score">${score}%</div><div class="ranked-meta">${safeNum(entry.runs)}R${provTag}${failTag}</div></div>`;
+    }).join('')}</div>`;
+  } else if(mode==='table'){
+    body=`<div class="ranked-table-wrap"><table class="ranked-table"><thead><tr><th>#</th><th>Model</th><th>Score</th><th>Pass</th><th>Crit Fail</th><th>Runs</th><th>Status</th></tr></thead><tbody>${entries.map((entry,i)=>{
+      const score=safeScore(entry.avgOverall);
+      const passRate=safeNum(entry.passRate);
+      const failRate=entry.runs>0?Math.round((safeNum(entry.failures)/entry.runs)*100):0;
+      const adequate=entry.sampleAdequate!==false;
+      const statusLabel=adequate?'TRUSTED':'PROVISIONAL';
+      const statusCls=adequate?'teal':'dim';
+      const focused=focusedModel&&normalizeId(entry.model)===normalizeId(focusedModel)?'focused':'';
+      const clickFnT=`focusModelDrilldown('${esc(tabKey)}','${esc(safeStr(entry.model))}')`;
+      return`<tr class="clickable ${focused}" onclick="${clickFnT}" tabindex="0" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();${clickFnT}}" aria-label="Inspect ${esc(safeStr(entry.model))}"><td>${i+1}</td><td class="rt-model">${esc(safeStr(entry.model))}</td><td class="rt-score ${score>=80?'teal':score>=55?'orange':'red'}">${score}%</td><td>${passRate}%</td><td class="${failRate>10?'red':''}">${failRate}%</td><td>${safeNum(entry.runs)}</td><td><span class="tag ${statusCls}">${statusLabel}</span></td></tr>`;
+    }).join('')}</tbody></table></div>`;
+  } else {
+    body=`<div class="ranked-chart">${entries.map((entry,i)=>{
+      const score=safeScore(entry.avgOverall);
+      const width=Math.max(4,Math.round((score/top)*100));
+      const cls=score>=80?'pass':score>=55?'warn':'fail';
+      const focused=focusedModel&&normalizeId(entry.model)===normalizeId(focusedModel)?'focused':'';
+      const clickFnC=`focusModelDrilldown('${esc(tabKey)}','${esc(safeStr(entry.model))}')`;
+      return`<div class="chart-row clickable ${focused}" onclick="${clickFnC}"${kbClick(clickFnC)} aria-label="Inspect ${esc(safeStr(entry.model))}"><div class="chart-label">${esc(safeStr(entry.model).slice(0,18))}</div><div class="chart-bar-track"><div class="chart-bar-fill ${cls}" style="width:${width}%"></div><span class="chart-bar-value">${score}%</span></div></div>`;
+    }).join('')}</div>`;
+  }
+
+  const drilldown=focusedModel?renderModelDrilldown(tabKey,focusedModel):'';
+
+  return`<section class="panel benchmark-results" style="padding:14px">
+    <div class="benchmark-results-head">
+      <div><div class="mini-label">BENCHMARK RESULTS</div><h3 class="panel-title">Ranked Model Comparison</h3></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        ${toggles}
+        <span class="chip ${scope.kind==='lane'?'teal':'cyan'} scope-chip" data-scope-kind="${scope.kind}">SCOPE · ${esc(scope.scopeLabel)}</span>
+        ${exportBtns}
+      </div>
+    </div>
+    ${body}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
+      <span class="tag dim">${entries.length} MODEL${entries.length===1?'':'S'} RANKED</span>
+      <span class="tag dim">${scope.sampleSize} TOTAL RUN${scope.sampleSize===1?'':'S'}</span>
+      ${scope.provisional?'<span class="tag amber">PROVISIONAL DATA</span>':''}
+      ${entries[0]?`<span class="tag teal">LEADER · ${esc(safeStr(entries[0].model).slice(0,20).toUpperCase())}</span>`:''}
+    </div>
+  </section>${drilldown}`;
+}
+
+function renderModelDrilldown(tabKey,modelId){
+  const sort=state.drilldownSort||'newest';
+  const allRuns=shapeModelDrilldown(tabKey,modelId,sort);
+  const scope=laneScopeDescriptor(tabKey);
+  const hasRuns=allRuns.length>0;
+  const{visible,total,hasMore}=drilldownVisibleSlice(allRuns,state.drilldownPage);
+
+  const drillExport=hasRuns
+    ?`<div class="export-group"><button type="button" class="export-btn" onclick="exportDrilldownJSON('${esc(tabKey)}','${esc(modelId)}')" title="Export this model's runs as JSON">JSON</button><button type="button" class="export-btn" onclick="exportDrilldownCSV('${esc(tabKey)}','${esc(modelId)}')" title="Export this model's runs as CSV">CSV</button></div>`
+    :'';
+
+  const passCount=allRuns.filter(r=>r.pass).length;
+  const critCount=allRuns.filter(r=>r.isCriticalFailure).length;
+  const avgScore=allRuns.length?Math.round(allRuns.reduce((s,r)=>s+r.score,0)/allRuns.length):0;
+  const receiptCount=allRuns.filter(r=>r.hasReceipt).length;
+
+  const sortBar=hasRuns?`<div class="dd-sort-bar"><span class="dd-sort-label">SORT</span><div class="benchmark-view-toggles" role="group" aria-label="Sort order"><button type="button" class="bvt-btn ${sort==='newest'?'active':''}" onclick="setDrilldownSort('newest')" aria-pressed="${sort==='newest'}">NEWEST</button><button type="button" class="bvt-btn ${sort==='lowest'?'active':''}" onclick="setDrilldownSort('lowest')" aria-pressed="${sort==='lowest'}">LOWEST</button><button type="button" class="bvt-btn ${sort==='critical'?'active':''}" onclick="setDrilldownSort('critical')" aria-pressed="${sort==='critical'}">CRITICAL</button></div></div>`:'';
+
+  let runRows='';
+  if(!hasRuns){
+    runRows=`<div class="empty empty-lane"><div class="empty-title">NO RUNS FOR ${esc(safeStr(modelId).toUpperCase())}</div><div class="empty-body">No indexed runs match this model in the current scope. The model may have been renamed, or runs may be in a different lane.</div></div>`;
+  } else {
+    runRows=`<div class="drilldown-runs">${visible.map(r=>{
+      const cls=r.score>=80?'pass':r.score>=55?'warn':'fail';
+      const critTag=r.isCriticalFailure?'<span class="tag red">CRITICAL</span>':'';
+      const infraTag=r.isInfraIssue?'<span class="tag dim">INFRA</span>':'';
+      const modelFailTag=r.isModelFailure?'<span class="tag red">MODEL FAIL</span>':'';
+      const receiptTag=r.hasReceipt?`<span class="tag teal" title="Receipt: ${esc(r.bundleHash)}">RECEIPT</span>`:'<span class="tag dim">NO RECEIPT</span>';
+      const taskLabel=r.task?`<span class="tag dim">${esc(r.task.slice(0,24))}</span>`:'';
+      const familyLabel=r.family?`<span class="tag dim">${esc(r.family)}</span>`:'';
+      const ts=r.timestamp?fmtDate(r.timestamp):'N/A';
+      const evSum=r.evidenceSummary?`<div class="dd-evidence">${esc(r.evidenceSummary.slice(0,200))}</div>`:'<div class="dd-evidence dd-na">No evidence summary available.</div>';
+      const catLine=r.categorySummary?`<div class="dd-categories">${esc(r.categorySummary)}</div>`:'';
+      const runClickFn=`focusDrilldownRun('${esc(tabKey)}','${esc(r.runId)}')`;
+      return`<article class="dd-run clickable ${cls}" onclick="${runClickFn}" tabindex="0" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();${runClickFn}}" aria-label="View evidence for run ${esc(r.runId.slice(0,12))}"><div class="dd-run-head"><div class="dd-run-left"><span class="badge ${cls}">${esc(r.verdictLabel)}</span><span class="dd-score ${cls}">${r.score}%</span>${critTag}${modelFailTag}${infraTag}</div><div class="dd-run-right">${taskLabel}${familyLabel}${receiptTag}<button type="button" class="dd-view-btn" onclick="event.stopPropagation();${runClickFn}" title="Open full evidence inspector for this run">VIEW EVIDENCE</button></div></div><div class="dd-run-meta"><span class="dd-ts">${esc(ts)}</span>${r.bundleHash?`<span class="dd-hash" title="${esc(r.bundleHash)}">#${esc(r.bundleHash.slice(0,8))}</span>`:''}<span class="dd-rid">${esc(r.runId.slice(0,16))}</span></div>${catLine}${evSum}</article>`;
+    }).join('')}</div>`;
+    if(hasMore){
+      runRows+=`<div class="dd-pagination"><button type="button" class="bvt-btn active" onclick="drilldownShowMore()">SHOW MORE (${visible.length} of ${total})</button></div>`;
+    } else if(total>DRILLDOWN_PAGE_SIZE){
+      runRows+=`<div class="dd-pagination"><span class="tag dim">ALL ${total} RUNS SHOWN</span></div>`;
+    }
+  }
+
+  return`<section class="panel dd-panel" style="padding:14px" id="model-drilldown">
+    <div class="section-head"><div><div class="mini-label">MODEL DRILLDOWN</div><h3>${esc(safeStr(modelId))}</h3></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="chip ${scope.kind==='lane'?'teal':'cyan'}" data-scope-kind="${scope.kind}">SCOPE · ${esc(scope.scopeLabel)}</span>${drillExport}<button type="button" class="bvt-btn" onclick="clearModelDrilldown()">BACK TO ALL</button></div></div>
+    ${hasRuns?`<div class="dd-vitals"><div class="dd-vital"><div class="dd-vital-label">RUNS</div><div class="dd-vital-value">${allRuns.length}</div></div><div class="dd-vital"><div class="dd-vital-label">AVG SCORE</div><div class="dd-vital-value ${avgScore>=80?'teal':avgScore>=55?'':'red'}">${avgScore}%</div></div><div class="dd-vital"><div class="dd-vital-label">PASS</div><div class="dd-vital-value teal">${passCount}</div></div><div class="dd-vital"><div class="dd-vital-label">CRITICAL FAIL</div><div class="dd-vital-value ${critCount?'red':''}">${critCount}</div></div><div class="dd-vital"><div class="dd-vital-label">RECEIPTS</div><div class="dd-vital-value ${receiptCount?'teal':'dim'}">${receiptCount}/${allRuns.length}</div></div></div>`:''}
+    ${sortBar}
+    ${runRows}
+  </section>`;
+}
+
 function renderComparisonBars(tabKey,title,entries,metricKey='avgOverall'){
   const scope=laneScopeDescriptor(tabKey);
   const dataError=state.tabData?.[tabKey]?.dataError||null;
@@ -3040,11 +3403,13 @@ function renderDashboard(){
 
       ${renderComparisonBars('dashboard','Overall Model Ranking',overview.rollups.slice(0,6),'avgOverall')}
 
+      ${renderRankedResults('dashboard')}
+
       ${renderCategoryReview('dashboard')}
 
       ${topCats.length?`<section class="panel" style="padding:14px"><div class="section-head"><div><div class="mini-label">STRONGEST SIGNALS</div><h3>Top Categories</h3></div></div><div class="run-strips">${topCats.map((entry)=>{const cls=entry.score>=80?'pass':entry.score>=55?'warn':'fail';return`<div class="run-strip ${cls}" style="cursor:default;grid-template-columns:12px minmax(0,1fr) minmax(0,1fr) 60px 70px"><div class="rs-dot"></div><div class="rs-model">${esc(entry.name)}</div><div class="rs-bar"><div class="rs-fill" style="width:${entry.score}%"></div></div><div class="rs-score">${entry.score}%</div><div class="rs-badge badge ${cls}">${cls==='pass'?'STABLE':cls==='warn'?'SHAKY':'FAILED'}</div></div>`}).join('')}</div></section>`:''}
 
-      ${lanes.length?`<section class="panel" style="padding:14px"><div class="section-head"><div><div class="mini-label">LANE PRESSURE</div><h3>Coverage</h3></div></div><div class="glyph-grid">${lanes.map(lane=>{const cls=lane.avg>=80?'teal':lane.avg>=55?'':'';return`<div class="glyph"><div class="g-label">${esc(lane.label)}</div><div class="g-value ${cls}">${lane.avg}%</div><div class="v-bar"><div class="v-fill ${cls}" style="width:${lane.avg}%"></div></div><div class="g-label" style="font-size:8px">${lane.total} RUN · ${lane.passRate}% PASS</div></div>`}).join('')}</div></section>`:''}
+      ${lanes.length?`<section class="panel" style="padding:14px"><div class="section-head"><div><div class="mini-label">LANE PRESSURE</div><h3>Coverage</h3></div></div><div class="glyph-grid">${lanes.map(lane=>{const cls=lane.avg>=80?'teal':lane.avg>=55?'':'';return`<div class="glyph"><div class="g-label">${esc(lane.label)}</div><div class="g-value ${cls}">${lane.avg}%</div><div class="v-bar"><div class="v-fill ${cls}" style="width:${lane.avg}%"></div></div><div class="g-label" style="font-size:10px">${lane.total} RUN · ${lane.passRate}% PASS</div></div>`}).join('')}</div></section>`:''}
 
       <section class="panel" style="padding:14px" id="crit-evidence-anchor" tabindex="-1">
         <div class="section-head"><div><div class="mini-label">SIGNAL QUEUE</div><h3>Recent Runs</h3></div><span class="chip dim">${recent.length} VISIBLE</span></div>
@@ -3149,6 +3514,8 @@ function renderLane(tabKey){
       ${renderOverviewCards(tab.key)}
 
       ${renderLaneLeaderboardGraph(tab.key)}
+
+      ${renderRankedResults(tab.key)}
 
       ${renderCategoryReview(tab.key)}
 
@@ -3427,8 +3794,7 @@ function render(){
   // is live) → run-progress sweep → NAV BAND → active tab body. The mission
   // banner sits above the nav so live execution state is the first thing the
   // eye lands on, outranking historical analytics below.
-  const pairBtn=`<button class="auth-disclosure" type="button" onclick="window.openPairDeviceModal()" style="padding:6px 10px;border:1px solid rgba(120,200,255,.22);border-radius:10px;color:var(--ink-soft)" title="Pair another device (e.g. mobile)">⌬ Pair Device</button>`;
-  document.getElementById('app').innerHTML=`<div class="app-shell">${renderSystemStatusBar()}${renderOfflineBanner()}${renderHero()}${renderVerdictBanner()}${renderMissionBanner()}<div class="run-progress ${anyRunActive()?'active':''}" aria-hidden="true"></div><section class="nav-band" style="display:flex;align-items:center;justify-content:space-between;gap:12px"><nav class="tabbar">${renderTabs()}</nav>${pairBtn}</section>${renderActiveTab()}</div>`;
+  document.getElementById('app').innerHTML=`<div class="app-shell">${renderSystemStatusBar()}${renderOfflineBanner()}${renderHero()}${renderVerdictBanner()}${renderMissionBanner()}<div class="run-progress ${anyRunActive()?'active':''}" aria-hidden="true"></div><section class="nav-band"><nav class="tabbar">${renderTabs()}</nav></section>${renderActiveTab()}</div>`;
 }
 
 // Lightweight elapsed-time ticker — only touches text nodes marked with
@@ -3472,6 +3838,16 @@ window.focusDashboardRun=focusDashboardRun;
 window.toggleDetailRow=toggleDetailRow;
 window.toggleSection=toggleSection;
 window.setViewMode=setViewMode;
+window.setResultsView=setResultsView;
+window.exportAsJSON=exportAsJSON;
+window.exportAsCSV=exportAsCSV;
+window.focusModelDrilldown=focusModelDrilldown;
+window.clearModelDrilldown=clearModelDrilldown;
+window.exportDrilldownJSON=exportDrilldownJSON;
+window.exportDrilldownCSV=exportDrilldownCSV;
+window.focusDrilldownRun=focusDrilldownRun;
+window.drilldownShowMore=drilldownShowMore;
+window.setDrilldownSort=setDrilldownSort;
 // Providers/registry tab — all CRUD actions go via these.
 window.registryAddProvider=registryAddProvider;
 window.registryRemoveProvider=registryRemoveProvider;
@@ -3484,27 +3860,11 @@ window.registryBulkSubmit=registryBulkSubmit;
 window.registryToggleModel=registryToggleModel;
 window.registryRemoveModel=registryRemoveModel;
 
-// ── Boot state machine ──────────────────────────────────────────────────
-// States: 'loading' | 'auth_required' | 'auth_rejected' | 'ready' | 'boot_error'
-const BootState={status:'loading',authMessage:'',bootError:'',showAdvancedFallback:false,authStatus:null};
-
-async function fetchAuthStatus(){
-  try{
-    const res=await fetch('/api/auth/status');
-    if(!res.ok)return null;
-    return await res.json();
-  }catch{return null}
-}
-
-// Loopback bootstrap — silently issues a session token (NOT the master).
-async function tryBootstrapLocal(){
-  try{
-    const res=await fetch('/api/auth/bootstrap-local',{method:'POST'});
-    if(!res.ok)return null;
-    const body=await res.json();
-    return (body&&typeof body.token==='string'&&body.token.length>0)?body.token:null;
-  }catch{return null}
-}
+// ── Boot ────────────────────────────────────────────────────────────────
+// No sign-in / pairing / token gate. The UI loads directly. If the server
+// is unreachable or first-run data fails to load, render a soft error
+// screen with a retry button.
+const BootState={status:'loading',bootError:''};
 
 function renderBootError(err){
   const app=document.getElementById('app');
@@ -3524,249 +3884,10 @@ function bootErrorMarkup(err){
   return`<div class="app-shell"><section class="abyss-banner boot-soft" style="grid-template-columns:1fr"><div class="ab-callsign"><div class="ab-mark">${esc(mark)}</div><div class="ab-title">${esc(title)}</div><div class="ab-sub">${esc(guidance)}</div><div class="inline-warn data-error">DETAIL · ${esc(detail)}</div><button class="button secondary" onclick="boot()">RETRY LOAD</button></div></section></div>`;
 }
 
-function renderAuthScreen(){
-  const status=BootState.authStatus||{};
-  const canBoot=!!status.canBootstrapLocal;
-  const msg=BootState.authMessage||'';
-  const errorHtml=msg?`<div class="auth-error">${esc(msg)}</div>`:'';
-  const fallback=BootState.showAdvancedFallback;
-  const localPath=canBoot?`
-    <div class="auth-path">
-      <div class="auth-path-head">
-        <div class="auth-path-title">Local desktop bootstrap</div>
-      </div>
-      <div class="auth-path-sub">You're on the same machine as Crucible. One click signs you in with a session token — no copying anything.</div>
-      <button class="auth-path-cta primary" type="button" id="auth-bootstrap-btn">Sign in on this device</button>
-    </div>`:'';
-  const pairPath=`
-    <div class="auth-path">
-      <div class="auth-path-head">
-        <div class="auth-path-title">Pair this device</div>
-      </div>
-      <div class="auth-path-sub">On a desktop already signed into Crucible, click <strong>Pair Device</strong> to get a 6-character code.</div>
-      <input class="auth-input" id="auth-pair-code" type="text" autocomplete="one-time-code" autocapitalize="characters" autocorrect="off" spellcheck="false" inputmode="latin" maxlength="8" placeholder="Pairing code (e.g. K4MNQ7)" />
-      <button class="auth-path-cta" type="button" id="auth-pair-btn">Pair</button>
-    </div>`;
-  const fallbackBtn=fallback?'':`<button class="auth-disclosure" type="button" id="auth-show-fallback">Advanced · paste a raw token →</button>`;
-  const fallbackPath=fallback?`
-    <div class="auth-divider"></div>
-    <div class="auth-path">
-      <div class="auth-path-head">
-        <div class="auth-path-title">Advanced: server master token</div>
-      </div>
-      <div class="auth-path-sub">For operators only. Paste the raw <code>CRUCIBULUM_API_TOKEN</code> set on the server.</div>
-      <input class="auth-input" id="auth-token-input" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Bearer token" />
-      <label class="auth-remember"><input type="checkbox" id="auth-remember" checked /> Remember on this device</label>
-      <button class="auth-path-cta ghost" type="button" id="auth-submit">Connect with master token</button>
-    </div>`:'';
-  const app=document.getElementById('app');
-  if(!app)return;
-  app.innerHTML=`
-    <div class="auth-gate">
-      <div class="auth-card">
-        <div class="auth-eyebrow">CRUCIBLE · SECURED</div>
-        <h1 class="auth-title">Sign in</h1>
-        <p class="auth-sub">Pick the path that matches how you opened this URL.</p>
-        ${errorHtml}
-        <div class="auth-paths">${localPath}${pairPath}</div>
-        ${fallbackBtn}
-        ${fallbackPath}
-        <div class="auth-hint">
-          Tokens stay on this device. Pairing codes expire after 5 minutes and can only be used once.
-        </div>
-      </div>
-    </div>`;
-  // Wire up handlers (no inline onclick to avoid escaping concerns).
-  const bootBtn=document.getElementById('auth-bootstrap-btn');
-  if(bootBtn)bootBtn.addEventListener('click',doBootstrapLocal);
-  const pairBtn=document.getElementById('auth-pair-btn');
-  if(pairBtn)pairBtn.addEventListener('click',doRedeemPairing);
-  const pairInput=document.getElementById('auth-pair-code');
-  if(pairInput){
-    pairInput.addEventListener('keydown',(e)=>{if(e.key==='Enter'){e.preventDefault();doRedeemPairing()}});
-    if(typeof pairInput.focus==='function'&&!canBoot)pairInput.focus();
-  }
-  const showFallback=document.getElementById('auth-show-fallback');
-  if(showFallback)showFallback.addEventListener('click',()=>{BootState.showAdvancedFallback=true;renderAuthScreen()});
-  const submitMaster=document.getElementById('auth-submit');
-  if(submitMaster)submitMaster.addEventListener('click',submitAuthToken);
-}
-
-async function ensureAuthenticated(){
-  const status=await fetchAuthStatus();
-  BootState.authStatus=status;
-  // If status says no auth required (loopback + ALLOW_LOCAL=true on a server
-  // without a token requirement), proceed.
-  if(status&&status.authRequired===false&&!getStoredToken())return true;
-  // If we have a stored token, trust it for now — the first authed request
-  // will reject it via AuthError and we'll route back here.
-  if(getStoredToken())return true;
-  // Auto-bootstrap on loopback so desktop users never see the auth screen.
-  if(status&&status.canBootstrapLocal){
-    const token=await tryBootstrapLocal();
-    if(token){setStoredToken(token);return true}
-  }
-  return false;
-}
-
-async function doBootstrapLocal(){
-  const btn=document.getElementById('auth-bootstrap-btn');
-  if(btn)btn.disabled=true;
-  const token=await tryBootstrapLocal();
-  if(!token){
-    BootState.authMessage='Local bootstrap was refused. You may not be on the same machine as Crucible.';
-    renderAuthScreen();
-    return;
-  }
-  setStoredToken(token);
-  BootState.authMessage='';
-  await boot();
-}
-
-async function doRedeemPairing(){
-  const input=document.getElementById('auth-pair-code');
-  const btn=document.getElementById('auth-pair-btn');
-  const code=((input&&input.value)||'').trim().toUpperCase();
-  if(!code){BootState.authMessage='Enter the 6-character pairing code shown on the desktop.';renderAuthScreen();return}
-  if(btn)btn.disabled=true;
-  try{
-    const res=await fetch('/api/auth/redeem',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({code,deviceLabel:navigator.userAgent.slice(0,64)}),
-    });
-    if(res.status===200){
-      const body=await res.json();
-      if(body&&typeof body.token==='string'){
-        setStoredToken(body.token);
-        BootState.authMessage='';
-        await boot();
-        return;
-      }
-    }
-    let reason='unknown';
-    try{const body=await res.json();reason=body&&body.reason?body.reason:reason}catch{}
-    const msg=({
-      not_found:'That code is not recognized. Make sure you typed it exactly as shown.',
-      expired:'That pairing code has expired. Generate a new one on the desktop.',
-      already_redeemed:'That pairing code has already been used. Generate a new one.',
-      too_many_attempts:'Too many failed pairing attempts. Wait a minute and try again.',
-    })[reason]||`Pairing failed (${reason}).`;
-    BootState.authMessage=msg;
-    renderAuthScreen();
-  }catch(err){
-    BootState.authMessage='Could not reach the server: '+String(err).slice(0,100);
-    renderAuthScreen();
-  }
-}
-
-async function submitAuthToken(){
-  const input=document.getElementById('auth-token-input');
-  const remember=document.getElementById('auth-remember');
-  const btn=document.getElementById('auth-submit');
-  const token=((input&&input.value)||'').trim();
-  if(!token){BootState.authMessage='Paste the master token from the server.';renderAuthScreen();return}
-  if(btn)btn.disabled=true;
-  try{
-    const res=await fetch('/api/auth/status',{headers:{Authorization:'Bearer '+token}});
-    if(!res.ok){
-      BootState.authMessage='Token rejected. Double-check it and try again.';
-      renderAuthScreen();
-      return;
-    }
-    // Probe a real protected endpoint so we surface 401 immediately rather
-    // than waiting for the first loadBootData() call.
-    const probe=await fetch('/api/tasks',{headers:{Authorization:'Bearer '+token}});
-    if(probe.status===401){
-      BootState.authMessage='Token rejected. Double-check it and try again.';
-      renderAuthScreen();
-      return;
-    }
-  }catch(err){
-    BootState.authMessage='Could not reach the server: '+String(err).slice(0,100);
-    renderAuthScreen();
-    return;
-  }
-  if(!remember||remember.checked)setStoredToken(token);
-  BootState.authMessage='';
-  BootState.showAdvancedFallback=false;
-  await boot();
-}
-
-// ── In-app pair-device modal (post-auth) ──────────────────────────────────
-async function openPairDeviceModal(){
-  let pairing=null;
-  try{
-    const res=await fetch('/api/auth/pairing',{method:'POST'});
-    if(!res.ok)throw new Error(`Pairing issuance failed (${res.status})`);
-    pairing=await res.json();
-  }catch(err){
-    alert('Could not generate pairing token: '+String(err).slice(0,140));
-    return;
-  }
-  if(!pairing||!pairing.code){alert('Server returned an unexpected pairing response.');return}
-  const expiresIn=Math.max(0,Math.round((new Date(pairing.expiresAt).getTime()-Date.now())/1000));
-  const code=esc(pairing.code);
-  const url=esc(pairing.url||'');
-  const node=document.createElement('div');
-  node.className='pair-modal-backdrop';
-  node.id='pair-modal';
-  node.innerHTML=`
-    <div class="pair-modal" role="dialog" aria-label="Pair a device">
-      <div class="auth-eyebrow">PAIR A DEVICE</div>
-      <h2 class="auth-title" style="font-size:18px">Sign in another device</h2>
-      <p class="auth-sub">On the other device, open this URL or type the code into the Sign in screen.</p>
-      <div class="pair-code">${code}</div>
-      <div class="pair-url">${url}</div>
-      <div class="pair-meta">Expires in <span id="pair-countdown">${expiresIn}</span>s · single-use</div>
-      <div class="pair-row">
-        <button class="auth-path-cta" type="button" id="pair-copy">Copy URL</button>
-        <button class="auth-path-cta ghost" type="button" id="pair-close">Close</button>
-      </div>
-    </div>`;
-  document.body.appendChild(node);
-  const close=()=>{const n=document.getElementById('pair-modal');if(n&&n.parentNode)n.parentNode.removeChild(n);if(timer)clearInterval(timer)};
-  const closeBtn=document.getElementById('pair-close');
-  if(closeBtn)closeBtn.addEventListener('click',close);
-  const copyBtn=document.getElementById('pair-copy');
-  if(copyBtn)copyBtn.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(pairing.url||pairing.code);copyBtn.textContent='Copied!'}catch{copyBtn.textContent='Copy failed'}});
-  // Backdrop click also closes.
-  node.addEventListener('click',(e)=>{if(e.target===node)close()});
-  // Live countdown.
-  const countdownEl=document.getElementById('pair-countdown');
-  let remaining=expiresIn;
-  const timer=setInterval(()=>{
-    remaining-=1;
-    if(remaining<=0){if(countdownEl)countdownEl.textContent='0';close();return}
-    if(countdownEl)countdownEl.textContent=String(remaining);
-  },1000);
-}
-
 async function boot(){
   BootState.status='loading';
   try{
-    const authed=await ensureAuthenticated();
-    if(!authed){
-      BootState.status='auth_required';
-      BootState.authMessage='';
-      renderAuthScreen();
-      return;
-    }
-    try{
-      await loadBootData();
-    }catch(err){
-      if(err instanceof AuthError){
-        clearStoredToken();
-        BootState.status='auth_rejected';
-        BootState.authMessage='Your session was rejected. Sign in again.';
-        // Re-fetch auth status so the screen offers the right paths after
-        // the rejection.
-        BootState.authStatus=await fetchAuthStatus();
-        renderAuthScreen();
-        return;
-      }
-      throw err;
-    }
+    await loadBootData();
     BootState.status='ready';
     render();
     startElapsedTicker();
@@ -3778,41 +3899,10 @@ async function boot(){
   }
 }
 
-// Auto-redeem pairing when the URL contains ?pair=<token>. Stripped from the
-// address bar after redemption so the link can't be re-shared.
-async function maybeRedeemPairLink(){
-  try{
-    const params=new URLSearchParams(location.search||'');
-    const token=params.get('pair');
-    if(!token)return false;
-    const res=await fetch('/api/auth/redeem',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({token,deviceLabel:navigator.userAgent.slice(0,64)}),
-    });
-    params.delete('pair');
-    const cleanQs=params.toString();
-    history.replaceState({},'',location.pathname+(cleanQs?'?'+cleanQs:'')+location.hash);
-    if(res.status===200){
-      const body=await res.json();
-      if(body&&typeof body.token==='string'){setStoredToken(body.token);return true}
-    }
-    let reason='unknown';
-    try{const body=await res.json();reason=body&&body.reason?body.reason:reason}catch{}
-    BootState.authMessage='Pairing link rejected ('+reason+'). Try a fresh code on the desktop.';
-    return false;
-  }catch{return false}
-}
-
-window.submitAuthToken=submitAuthToken;
-window.openPairDeviceModal=openPairDeviceModal;
 window.boot=boot;
 window.runHealthChecks=runHealthChecks;
 
-(async function bootstrap(){
-  await maybeRedeemPairLink();
-  await boot();
-})();
+boot();
 </script>
 </body>
 </html>

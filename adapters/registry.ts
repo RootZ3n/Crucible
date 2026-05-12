@@ -261,7 +261,7 @@ const REGISTRY: RegistryDefinition[] = [
   },
   {
     id: "claudecode",
-    name: "Claude Code",
+    name: "Claude Code (deprecated)",
     kind: "subprocess",
     provider_mode: "fixed",
     fixed_provider: "anthropic",

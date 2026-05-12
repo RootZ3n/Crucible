@@ -1,6 +1,7 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { getAdapterCatalog, listFlattenedModels, listRegisteredAdapters } from "../adapters/registry.js";
+import { ClaudeCodeAdapter } from "../adapters/claudecode.js";
 
 const realFetch = globalThis.fetch;
 const realOpenRouterKey = process.env["OPENROUTER_API_KEY"];
@@ -55,6 +56,22 @@ describe("adapter registry", () => {
     assert.ok(openrouter);
     assert.equal(openrouter.available, false);
     assert.match(openrouter.reason || "", /API_KEY|Authentication/i);
+  });
+
+  it("claudecode adapter reports deprecated without spawning binary", async () => {
+    const adapter = new ClaudeCodeAdapter();
+    const health = await adapter.healthCheck();
+    assert.equal(health.ok, false, "must report unavailable");
+    assert.ok(health.reason, "reason must be present");
+    assert.ok(health.providerError, "providerError must be present");
+    // execute must return structured error, not throw
+    const result = await adapter.execute({} as never);
+    assert.equal(result.exit_reason, "error");
+    assert.match(result.adapter_metadata.adapter_version, /deprecated/);
+    // supports must return false for all families
+    assert.equal(adapter.supports("poison"), false);
+    assert.equal(adapter.supports("spec"), false);
+    assert.equal(adapter.supports("orchestration"), false);
   });
 
   it("flattens adapter-backed model availability from registry APIs", async () => {

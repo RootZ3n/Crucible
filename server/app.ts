@@ -18,7 +18,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../utils/logger.js";
 import { sendJSON } from "./routes/shared.js";
-import { requireAuth, ensureTokenConfigured } from "./auth.js";
 import { envValue } from "../utils/env.js";
 import { loadAllScorers } from "../core/scorer-registry.js";
 import { enforce, RATE_READ, RATE_RUN, RATE_INGEST } from "./rate-limit.js";
@@ -27,7 +26,6 @@ import * as health from "./routes/health.js";
 import * as run from "./routes/run.js";
 import * as suite from "./routes/suite.js";
 import * as leaderboard from "./routes/leaderboard.js";
-import * as auth from "./routes/auth.js";
 import * as registry from "./routes/registry.js";
 import { handleRunBatch } from "./routes/batch.js";
 
@@ -103,54 +101,17 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, opts: Cr
 
     const isApi = path.startsWith("/api/") || ["runs", "stats", "receipts", "leaderboard", "health"].some((p) => path === `/${p}`);
     const isHealthAlias = path === "/health";
-    // Auth-surface endpoints bypass the global auth gate. Each implements its
-    // own policy: /auth/status is public; /auth/bootstrap* is loopback-only;
-    // /auth/redeem is a public secret-input endpoint (rate-limited);
-    // /auth/pairing and /auth/logout are auth-gated inside the handler.
-    const isAuthSurface = path === "/api/auth/status"
-      || path === "/api/auth/bootstrap"
-      || path === "/api/auth/bootstrap-local"
-      || path === "/api/auth/redeem"
-      || path === "/api/auth/pairing"
-      || path === "/api/auth/logout";
 
     if (isApi && opts.rateLimit !== false) {
-      // /auth/redeem is brute-forceable input — bind it to the tighter
-      // ingest bucket. Other auth-surface POSTs are also tight (avoids
-      // someone using /pairing to spam token issuance).
-      const isAuthIngest = path === "/api/auth/redeem" || path === "/api/auth/pairing" || path === "/api/auth/bootstrap-local";
       const isWrite = method === "POST" || method === "PATCH" || method === "DELETE";
       const rule = isWrite
-        ? (isAuthIngest || path === "/api/scores/sync" || path === "/api/verum/ingest" ? RATE_INGEST : RATE_RUN)
+        ? (path === "/api/scores/sync" || path === "/api/verum/ingest" ? RATE_INGEST : RATE_RUN)
         : RATE_READ;
       if (!enforce(req, res, rule)) return;
     }
 
-    if (isApi && !isAuthSurface) {
-      if (!requireAuth(req, res)) return;
-    }
-
     if ((path === "/api/health" || isHealthAlias) && method === "GET") {
       return void await health.handleHealth(req, res);
-    }
-
-    if (path === "/api/auth/status" && method === "GET") {
-      return void await auth.handleAuthStatus(req, res);
-    }
-    if (path === "/api/auth/bootstrap" && method === "GET") {
-      return void await auth.handleAuthBootstrap(req, res);
-    }
-    if (path === "/api/auth/bootstrap-local" && method === "POST") {
-      return void await auth.handleAuthBootstrapLocal(req, res);
-    }
-    if (path === "/api/auth/pairing" && method === "POST") {
-      return void await auth.handleAuthPairing(req, res);
-    }
-    if (path === "/api/auth/redeem" && method === "POST") {
-      return void await auth.handleAuthRedeem(req, res);
-    }
-    if (path === "/api/auth/logout" && method === "POST") {
-      return void await auth.handleAuthLogout(req, res);
     }
 
     if (path === "/api/scorers" && method === "GET") return void await health.handleScorers(req, res);
@@ -240,10 +201,7 @@ export function createApp(options: CreateAppOptions = {}): Server {
  */
 export async function startServer(port: number = DEFAULT_PORT, host: string = DEFAULT_HOST): Promise<Server> {
   const server = createApp();
-  // Resolve/generate the auth token and log the bootstrap banner if one was
-  // just auto-generated. Done before listen() so the banner appears above
-  // the "server running" line in operator logs.
-  ensureTokenConfigured();
+  log("info", "api", "Auth: NONE — no built-in authentication. Bind to loopback or put a private-network gate (Tailscale, VPN, firewall, reverse-proxy auth) in front of Crucible if you expose it beyond this machine.");
   if (!process.env["CRUCIBLE_HMAC_KEY"]) {
     log("warn", "hmac", "CRUCIBLE_HMAC_KEY is not set — unsigned bundles will be quarantined and not ranked on the public leaderboard");
     log("warn", "hmac", "This is fine for local demos, but meaningful verified rankings require a configured HMAC key");

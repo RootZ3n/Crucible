@@ -52,6 +52,7 @@
     "smoke": "node scripts/smoke.mjs",
     "verify:release": "node scripts/verify-release.mjs",
     "audit:release": "node scripts/audit-release.mjs",
+    "package:windows": "powershell -ExecutionPolicy Bypass -File scripts/package-windows-zip.ps1",
     "doctor": "node scripts/doctor.mjs",
     "clean:state": "node scripts/clean-state.mjs",
     "oracle:hash": "node dist/cli/main.js oracle-hash",

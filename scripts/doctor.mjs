@@ -94,8 +94,6 @@ const envKeys = [
   ["CRUCIBLE_HOST", "default 127.0.0.1"],
   ["CRUCIBLE_PORT", "default 18795"],
   ["CRUCIBLE_HMAC_KEY", "required for verified rankings"],
-  ["CRUCIBLE_API_TOKEN", "required for non-loopback access"],
-  ["CRUCIBLE_ALLOW_LOCAL", "default true"],
 ];
 for (const [key, hint] of envKeys) {
   const value = process.env[key];

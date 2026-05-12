@@ -35,8 +35,13 @@ function extractScript(): string {
   const match = uiHtml.match(/^<script>\n([\s\S]*?)\n<\/script>/m);
   assert.ok(match, "ui/index.html must contain a real <script> block");
   let src = match![1]!;
-  // Neutralize the bootstrap IIFE so loading doesn't fire network calls.
-  src = src.replace(/\(async function bootstrap\(\)\{[\s\S]*?\}\)\(\);?\s*$/, "");
+  // Neutralize the trailing boot() call so loading doesn't fire network calls.
+  // Crucible no longer ships a bootstrap IIFE — the script ends with a bare
+  // `boot();` after the `window.boot = boot` exports. Strip whichever pattern
+  // is present.
+  src = src
+    .replace(/\(async function bootstrap\(\)\{[\s\S]*?\}\)\(\);?\s*$/, "")
+    .replace(/\nboot\(\);?\s*$/, "\n");
   return src;
 }
 

@@ -1,0 +1,19 @@
+{
+  "suppressions": [
+    {
+      "ruleId": "secret-env-committed",
+      "path": ".env",
+      "reason": ".env is gitignored and untracked; scanner flags it from the working directory, not from git history."
+    },
+    {
+      "ruleId": "secret-generic-api-key",
+      "path": "tests/provider-registry.test.ts",
+      "reason": "Intentional fake API key ('sk-or-v1-ABCDEFGHIJKLMN') used to verify serialization masking in provider registry test."
+    },
+    {
+      "ruleId": "secret-generic-api-key",
+      "path": "tests/route-contract.test.ts",
+      "reason": "Intentional fake API key ('sk-or-v1-ZZZZYYYY9999') used to verify API response masking in route contract test."
+    }
+  ]
+}

@@ -28,8 +28,6 @@ const STATE_DIR = mkdtempSync(join(tmpdir(), "crcb-sse-state-"));
 mkdirSync(join(STATE_DIR, "memory-sessions"), { recursive: true });
 process.env["CRUCIBULUM_RUNS_DIR"] = RUNS_DIR;
 process.env["CRUCIBULUM_STATE_DIR"] = STATE_DIR;
-delete process.env["CRUCIBULUM_API_TOKEN"];
-process.env["CRUCIBULUM_ALLOW_LOCAL"] = "true";
 
 const { createApp } = await import("../server/app.js");
 

@@ -26,10 +26,6 @@ mkdirSync(join(STATE_DIR, "memory-sessions"), { recursive: true });
 process.env["CRUCIBULUM_RUNS_DIR"] = RUNS_DIR;
 process.env["CRUCIBULUM_STATE_DIR"] = STATE_DIR;
 process.env["CRUCIBULUM_LINKS_DIR"] = LINKS_DIR;
-// Tests bind on loopback, which the default auth treats as local-allowed.
-// Make sure we don't accidentally require a token.
-delete process.env["CRUCIBULUM_API_TOKEN"];
-process.env["CRUCIBULUM_ALLOW_LOCAL"] = "true";
 process.env["CRUCIBLE_HMAC_KEY"] = "route-contract-test-hmac-key";
 
 const { createApp } = await import("../server/app.js");

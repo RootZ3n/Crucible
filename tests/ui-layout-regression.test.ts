@@ -267,32 +267,29 @@ describe("ui-layout-regression: Providers tab is wired and backed by the registr
   });
 });
 
-describe("ui-layout-regression: auth screen presence and mobile layout", () => {
-  // These don't run a real browser, but they do pin that the auth-screen
-  // CSS and the auth-submit handler are present in the shipped UI. If a
-  // future refactor removes them, the unauthorized boot would silently fall
-  // back to the old "BOOT FAILURE" dead end on mobile/remote users.
-  it("ships auth-card styles and a mobile breakpoint for the card", () => {
-    assert.match(ui, /\.auth-card\s*\{/, "auth-card rule must exist");
-    assert.match(ui, /@media\s*\(\s*max-width\s*:\s*480px\s*\)\s*\{[\s\S]*?\.auth-card/, "auth-card must have a narrow-screen override");
+describe("ui-layout-regression: no built-in auth gate", () => {
+  // Crucible has no built-in auth — the UI must boot directly with no
+  // sign-in screen, pairing flow, or Authorization header. These pins
+  // catch a regression that re-introduces a token gate in the default
+  // boot path.
+  it("does not ship the legacy auth-card / auth-gate / pair-modal styles", () => {
+    assert.doesNotMatch(ui, /\.auth-card\s*\{/, "auth-card CSS must not exist");
+    assert.doesNotMatch(ui, /\.auth-gate\s*\{/, "auth-gate CSS must not exist");
+    assert.doesNotMatch(ui, /\.pair-modal\s*\{/, "pair-modal CSS must not exist");
   });
 
-  it("defines the auth submit handler and window hook", () => {
-    assert.match(ui, /async function submitAuthToken/);
-    assert.match(ui, /window\.submitAuthToken\s*=\s*submitAuthToken/);
+  it("does not define a sign-in / pairing handler", () => {
+    assert.doesNotMatch(ui, /submitAuthToken/);
+    assert.doesNotMatch(ui, /openPairDeviceModal/);
+    assert.doesNotMatch(ui, /tryBootstrapLocal/);
   });
 
-  it("attempts bootstrap before showing the manual-entry form", () => {
-    assert.match(ui, /function tryBootstrapLocal/);
-    assert.match(ui, /\/api\/auth\/bootstrap-local/);
-    assert.match(ui, /\/api\/auth\/status/);
+  it("does not call any /api/auth/* endpoint", () => {
+    assert.doesNotMatch(ui, /\/api\/auth\//);
   });
 
-  it("centralizes Bearer attachment in fetchJSON and reacts to 401", () => {
-    // The minified UI calls headers.set('Authorization','Bearer '+token).
-    // Pin the Bearer prefix construction and the dedicated AuthError class.
-    assert.match(ui, /['"]Bearer\s+['"]\s*\+\s*token/, "fetchJSON should build a 'Bearer <token>' header");
-    assert.match(ui, /class\s+AuthError/, "fetchJSON should throw a dedicated AuthError on 401");
-    assert.match(ui, /res\.status\s*===\s*401/, "fetchJSON should branch explicitly on 401");
+  it("does not attach Authorization: Bearer headers in fetchJSON", () => {
+    assert.doesNotMatch(ui, /['"]Bearer\s+['"]\s*\+\s*token/);
+    assert.doesNotMatch(ui, /class\s+AuthError/);
   });
 });

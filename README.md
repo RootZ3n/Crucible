@@ -416,7 +416,7 @@ Expected outcome:
 3. Open `http://127.0.0.1:18795/` in your browser. You will see the Crucible UI shell.
 4. The default public leaderboard view will be **empty**. That is expected on a fresh checkout — Crucible only ranks **verified eligible bundles**, and the smoke test produces deliberately quarantined mock/demo evidence. Empty here means "nothing has earned a public rank yet," not "broken."
 5. Quarantined / mock-or-demo evidence (including the smoke output) is visible from `/api/leaderboard/quarantine` and is labeled `NOT RANKED`. That is the correct first-run state.
-6. Stop the server with `Ctrl+C`. Run `npm run clean:state -- --confirm` if you want to wipe local runs and the auto-generated auth token before continuing.
+6. Stop the server with `Ctrl+C`. Run `npm run clean:state -- --confirm` if you want to wipe local runs before continuing.
 
 You are now ready to import real evidence (see "Adding Tasks and Adapters") or run a live adapter (see "Live Adapter Setup").
 
@@ -475,17 +475,17 @@ Set `CRUCIBLE_PORT` to use a different port. Set `CRUCIBLE_HOST=0.0.0.0` only wh
 
 To stop the server, press `Ctrl+C` in the terminal where it is running. There is no separate stop command. State written to `runs/` and `state/` persists across restarts; use `npm run clean:state -- --confirm` to clear it.
 
-## How Auth Works
+## Security note
 
-Crucible authenticates every API call. It is built around a single token and a loopback exemption:
+**Crucible has no built-in authentication.** Anything that can reach the bound port can call the API. The default bind is `127.0.0.1`, which keeps the server reachable only from your own machine. This app assumes it is running on a trusted private network. Do not expose it directly to the public internet without adding your own access control.
 
-- **Loopback (default):** when the server binds to `127.0.0.1` (the default), connections from the same machine are auto-authenticated. You do not need to paste a token to use the local UI in your browser. This behavior is controlled by `CRUCIBLE_ALLOW_LOCAL` (default `true`).
-- **Remote / mobile / proxy:** any client that is not on loopback must send `Authorization: Bearer <token>`. On first start, Crucible auto-generates a token and persists it to `state/auth-token` (mode 0600). The token is printed once in the startup banner so you can paste it into a remote/mobile client.
-- **Override:** set `CRUCIBLE_API_TOKEN` to use your own token instead of the auto-generated one.
-- **Rotate:** delete `state/auth-token` and restart. A new token will be generated.
-- **Sessions:** the loopback `bootstrap-local` and pairing flows issue session tokens for paired clients. The master token still works as a fallback.
+If you need access from another device, put a private-network gate in front of Crucible — pick whichever fits your setup:
 
-All leaderboard and score-query endpoints require auth even on loopback when `CRUCIBLE_ALLOW_LOCAL=false`. Unauthenticated requests get a `401 Unauthorized` JSON response.
+- run it behind Tailscale or a VPN and rely on tailnet / VPN-level identity;
+- bind to `0.0.0.0` only when there is a firewall in front and the LAN is trusted;
+- run a reverse proxy (nginx, Caddy, Cloudflare Tunnel, etc.) that handles authentication before forwarding to Crucible.
+
+There are no built-in tokens, sign-in screens, or pairing flows to configure. Securing the network path is the operator's responsibility.
 
 ## Setting CRUCIBLE_HMAC_KEY
 
@@ -572,7 +572,7 @@ Mock mode is for offline pipeline validation only. Mock results must not be cite
 Crucible writes local runs and state to ignored directories by default:
 
 - `runs/` for generated evidence bundles and harness reports
-- `state/` for auth/session/provider registry data
+- `state/` for provider registry data
 
 To clear local/demo state, stop the server first, then run:
 
@@ -596,14 +596,13 @@ Run `npm run doctor` first — it is read-only and reports most common issues.
 - **Windows execution policy blocks `npm`:** PowerShell may refuse to run npm shims with `cannot be loaded because running scripts is disabled on this system`. Fix once per user: `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned`. Use Windows Terminal (PowerShell 7+) for the commands in this README; cmd.exe is not tested.
 - **Empty leaderboard / "I see no data":** this is the correct fresh-checkout state. Default leaderboards rank only verified eligible evidence. Smoke output is mock/demo and is deliberately quarantined. Inspect `/api/leaderboard/quarantine` to confirm the data is there but `NOT RANKED`.
 - **`CRUCIBLE_HMAC_KEY is not set` warning:** expected on a first local run. Bundles you generate without a key will be quarantined as `unsigned_key_missing`. Set the key (see "Setting CRUCIBLE_HMAC_KEY") before generating evidence you intend to publish.
-- **`Unauthorized` / 401 on `/api/...`:** you are hitting the API from outside loopback (remote machine, container, mobile, reverse proxy). Send `Authorization: Bearer <token>` using the token printed in the server startup banner or the value at `state/auth-token`. The browser UI on the same machine never needs a token.
-- **Lost the auth token:** delete `state/auth-token` and restart the server — a new one prints in the startup banner. Or set `CRUCIBLE_API_TOKEN` to a value you choose.
+- **Cannot reach the API from another device:** the default bind is `127.0.0.1`. Set `CRUCIBLE_HOST` to a routable address (your Tailscale IP, a LAN IP, or `0.0.0.0` when firewalled) and read the security note in `SECURITY.md` first. Crucible has no built-in auth — anything that can reach the bound port can call the API.
 - **Malformed or tampered runs:** Crucible quarantines them. Inspect safe metadata at `/api/leaderboard/quarantine`; do not cite them as public leaderboard evidence.
 - **Live adapter fails with "missing key":** offline `npm run smoke` needs no provider keys. Live adapters fail loudly and name the required key, such as `OPENROUTER_API_KEY` or `MINIMAX_API_KEY`.
 - **PowerShell path issues:** use npm scripts (`npm run smoke`, `npm run serve`, `npm run harness -- --task safety-001`) instead of invoking files under `dist/` directly.
 - **`npm ci` fails on registry / EAI_AGAIN / 403:** corporate proxies and outdated certificates are the usual cause. Try `npm config get registry` (should be `https://registry.npmjs.org/`), clear with `npm cache clean --force`, and rerun. `npm audit` warnings during install are advisory; `npm ci` will still complete.
-- **Need to start fresh:** stop the server, then `npm run clean:state -- --confirm` removes `runs/` and `state/`. This wipes generated bundles, the auth token, and the local provider registry. It does not touch tasks, oracles, or imported evidence stored elsewhere.
-- **Need remote access:** default binding is local-only. Set `CRUCIBLE_HOST=0.0.0.0` deliberately, configure auth, and read `SECURITY.md` first.
+- **Need to start fresh:** stop the server, then `npm run clean:state -- --confirm` removes `runs/` and `state/`. This wipes generated bundles and the local provider registry. It does not touch tasks, oracles, or imported evidence stored elsewhere.
+- **Need remote access:** default binding is local-only. Set `CRUCIBLE_HOST=0.0.0.0` deliberately and put a private-network gate (Tailscale, VPN, firewall, reverse-proxy auth) in front of Crucible — read `SECURITY.md` first.
 
 ## Live Adapter Setup
 

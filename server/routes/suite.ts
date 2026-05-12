@@ -12,7 +12,6 @@ import { runTaskWithRetries, type FlakeResult } from "../../core/flake.js";
 import { storeBundle } from "../../core/bundle.js";
 import { DETERMINISTIC_JUDGE_METADATA } from "../../core/judge.js";
 import { listTaskDetails } from "./shared.js";
-import { requireAuth } from "../auth.js";
 import { resolveFlakeConfig, computeConfidence } from "../../core/suite-loader.js";
 
 export interface SuiteTaskResult {
@@ -73,7 +72,6 @@ export interface ActiveSuiteRun {
 export const activeSuiteRuns = new Map<string, ActiveSuiteRun>();
 
 export async function handleRunSuitePost(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!requireAuth(req, res)) return;
   const parsed = await parseJsonBody<unknown>(req);
   if (!parsed.ok) { sendJSON(res, 400, { error: parsed.error }); return; }
   const v = validateRunSuiteRequest(parsed.value);

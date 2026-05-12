@@ -9,7 +9,6 @@ import { getAdapterCatalog } from "../../adapters/registry.js";
 import { DETERMINISTIC_JUDGE_METADATA } from "../../core/judge.js";
 import { describeDefaultJudge, resolveJudgeConfig } from "../../core/judge-config.js";
 import { getCircuitState, rateLimitStatus, circuitReset } from "../../core/circuit-breaker.js";
-import { authStatus } from "../auth.js";
 import { listScorers } from "../../core/scorer-registry.js";
 import { listSuites, listTaskDetails } from "./shared.js";
 import { cleanupStaleArtifacts, getCleanupStats } from "../../core/cleanup.js";
@@ -18,7 +17,7 @@ export async function handleHealth(_req: IncomingMessage, res: ServerResponse): 
   sendJSON(res, 200, {
     status: "ok",
     service: "crucible",
-    auth: authStatus(),
+    auth: { enabled: false, scheme: "none", note: "no built-in auth — operator owns network-layer access control" },
     uptime: process.uptime(),
   });
 }
